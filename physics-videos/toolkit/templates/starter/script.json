@@ -1,0 +1,11 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-3%",
+  "lead": 0.8,
+  "tail": 2.4,
+  "lines": [
+    { "id": "hook",   "text": "Here's a strange fact about pendulums: a big swing and a small swing take the same time." },
+    { "id": "setup",  "text": "Pull the bob far out, and it swings back faster, because it falls from higher up.", "pauseBefore": 0.7 },
+    { "id": "payoff", "text": "More distance, more speed. The two cancel out, so every swing ticks at the same beat.", "pauseBefore": 0.7 }
+  ]
+}

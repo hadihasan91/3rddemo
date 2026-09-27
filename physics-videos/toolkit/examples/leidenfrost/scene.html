@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Leidenfrost Effect</title>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<script src="../../lib/sketch.js"></script>
+<script src="cues.js"></script>
+<script>
+/* =============================================================================
+   REFERENCE SCENE — The Leidenfrost Effect  (sketchbook theme, 16:9, ~61 s)
+   Shows the patterns every scene should follow:
+     • all timing derived from voice cues (C.<id>.at / .end) — never magic seconds
+     • one hero object (the pan) drawn large; supporting panels (thermometer,
+       zoom inset, chart) with big labels only; one-line captions
+     • a deterministic simulation stepped in update(); pure drawing in draw()
+     • S.sfx(...) one-shots + state() beds for the procedural foley
+   ========================================================================== */
+const S = Sketch.init({ theme: 'sketchbook' });
+const { ink, wash, hatch, txt, arrow, ell, clamp, smooth, lerp, rgba, PAL } = S;
+const C = window.CUES.lines;             // { intro, warm, boil, leid, leid2, cool, moral }
+const TOTAL = window.CUES.total;
+const INK_RED = rgba(PAL.red, 1), INK_BLUE = '#1f4f86';
+const C_WATER = PAL.water, C_WATER_D = PAL.waterDeep, C_METAL = PAL.metal, C_HOT = PAL.hot, C_STEAM = PAL.steam;
+
+/* ---------------------------------------------------------------- timeline */
+const SURF = 600, PAN_L = 384, PAN_R = 856, LEID = 193;
+const INSET = { x: 1282, y: 345, r: 170 };
+const PS = 1.12, PX = 620, PY = 752;                 // pan group drawn scaled up (hero)
+const toScreen = (x, y) => [PX + (x - PX) * PS, PY + (y - PY) * PS];
+
+const tempAt = S.keys([[0, 25], [C.boil.at - 1.0, 25], [C.boil.at + 1.0, 105], [C.leid.at - 0.3, 180], [C.leid.at + 2.7, 215],
+  [C.leid.at + 5.2, 250], [C.cool.at, 250], [C.cool.at + 2.2, 170], [C.cool.at + 5.0, 95], [C.moral.at + 2, 60], [TOTAL, 30]]);
+const flameAt = t => S.ease(t, C.boil.at - 1.2, C.boil.at - 0.4) * (1 - S.ease(t, C.cool.at - 0.4, C.cool.at + 0.1));
+const SPAWNS = [
+  { t: C.intro.at + 2.2, x: 610, r: 33 }, { t: C.boil.at + 3.3, x: 520, r: 31 }, { t: C.boil.at + 6.0, x: 700, r: 32 },
+  { t: C.leid.at + 2.1, x: 580, r: 33 }, { t: C.leid.at + 5.7, x: 720, r: 30 }, { t: C.leid.at + 8.7, x: 470, r: 33 },
+  { t: C.leid.at + 12.2, x: 650, r: 29 }, { t: C.leid2.at + 3.0, x: 760, r: 31 },
+];
+S.captions([
+  [C.warm.at - 0.1, 'Warm pan: the drop just sits there', { n: 1 }],
+  [C.boil.at, 'Hot pan: it sizzles away in seconds', { n: 2 }],
+  [C.leid.at + 1.4, 'Very hot pan: it floats on steam!', { n: 3 }],
+  [C.cool.at + 0.2, 'Cooler pan: the steam cushion collapses', { n: 4 }],
+  [C.moral.at - 0.2, 'A hotter pan makes water last longer', { n: '!', badge: PAL.yellow, band: PAL.yellow }],
+]);
+
+/* -------------------------------------------------------------- simulation */
+let T, drops, wisps, spatter, popups, puffs, pipettes, nextId, spawnIdx, ZOOM;
+function init() {
+  T = 25; drops = []; wisps = []; spatter = []; popups = []; puffs = []; pipettes = [];
+  nextId = 1; spawnIdx = 0; ZOOM = { x: 620, y: 586, r: 34, a: 0, id: 0 };
+}
+const rand = S.rand;
+function addPipette(x, r) { pipettes.push({ x, r, age: 0, dropped: false, key: 9000 + (nextId++) * 7 }); }
+function spawnDrop(x, r) {
+  drops.push({ id: nextId++, x, y: 372, vy: 0, vx: 0, r, state: 'fall', lev: 0, wobA: 0, wobP: 0, hopY: 0, hopV: 0, kick: 0.4,
+    bubbles: [], bubT: 0, hissT: 0.2, steamT: 0, boiling: false, wasLev: false });
+}
+function addWisp(x, y, amp = 6, life = 2, a = 0.55) { wisps.push({ x, y, age: 0, life, amp, s: rand() * 9, a }); }
+function addPopup(x, y, s, col = PAL.red, size = 34, force = false) { if (!force && popups.length >= 3) return; popups.push({ x, y, s, age: 0, rot: (rand() - .5) * 0.4, col, size, k: 30000 + (nextId++ % 5000) }); }
+function burst(x, y, n, spd = 1) {
+  for (let i = 0; i < n; i++) { const side = rand() < .5 ? -1 : 1; spatter.push({ x: x + side * rand() * 10, y, vx: side * (60 + rand() * 170) * spd, vy: -(140 + rand() * 260) * spd, age: 0, r: 2 + rand() * 2.5 }); }
+}
+function geom(d, t) {
+  const lev = d.lev;
+  const wob = d.wobA * Math.sin(d.wobP) + 0.035 * Math.sin(t * 6.5 + d.id * 1.7) + (d.boiling ? 0.05 * Math.sin(t * 47 + d.id) : 0);
+  const rx = d.r * (1.25 - 0.22 * lev) * (1 + wob), ry = d.r * (0.62 + 0.3 * lev) * (1 - wob), f = 0.15 + 0.4 * lev;
+  const gap = lev * (7 + 2 * Math.sin(t * 9 + d.id)), bottom = SURF - gap + d.hopY;
+  return { cx: d.x, rx, ry, f, gap, bottom, yc: bottom - ry * f };
+}
+function dropPts(g, n = 34) {
+  const p = [];
+  for (let i = 0; i < n; i++) { const th = i / n * Math.PI * 2, c = Math.cos(th), s = Math.sin(th); p.push([g.cx + g.rx * c, s > 0 ? g.yc + g.ry * g.f * s : g.yc + g.ry * s]); }
+  return p;
+}
+const topAt = (g, x) => g.yc - g.ry * Math.sqrt(Math.max(0, 1 - ((x - g.cx) / g.rx) ** 2));
+
+function update(dt, t) {
+  T = tempAt(t);
+  while (spawnIdx < SPAWNS.length && t >= SPAWNS[spawnIdx].t - 0.6) { const s = SPAWNS[spawnIdx++]; addPipette(s.x, s.r); }
+  for (const p of pipettes) { p.age += dt; if (!p.dropped && p.age >= 0.6) { p.dropped = true; if (drops.length < 8) spawnDrop(p.x, p.r); } }
+  pipettes = pipettes.filter(p => p.age < 1.6);
+  const leidT = T >= LEID;
+  for (const d of drops) {
+    if (d.state === 'fall') {
+      d.vy += 1500 * dt; d.y += d.vy * dt;
+      if (d.y + d.r * 0.8 >= SURF - (leidT ? 7 : 0)) {
+        d.state = 'rest'; d.lev = leidT ? 1 : 0; d.wasLev = leidT; d.wobA = 0.35;
+        if (leidT) { d.hopY = -1; d.hopV = -d.vy * 0.22; d.vx = (rand() - .5) * 160; addPopup(d.x + 40, SURF - 70, 'boing!', C_WATER_D, 36); S.sfx('drip', { gain: 0.6, pitch: 1.15 }); S.sfx('boing'); }
+        else if (T >= 100) { burst(d.x, SURF - 6, 8); addPopup(d.x, SURF - 70, 'TSSSS!'); S.sfx('drip', { gain: 0.7, pitch: 0.93 }); S.sfx('sizzle', { gain: 1.1 }); }
+        else { addPopup(d.x + 36, SURF - 60, 'plip', C_WATER_D, 34); S.sfx('drip'); }
+      }
+      continue;
+    }
+    const target = leidT ? 1 : 0;
+    d.lev += (target - d.lev) * Math.min(1, dt * (target ? 5 : 9));
+    const levNow = d.lev > 0.5;
+    if (d.wasLev && !levNow) { burst(d.x, SURF - 6, 10); if (!popups.some(p => p.s === 'crash!')) { addPopup(620, SURF - 95, 'crash!', PAL.red, 44, true); S.sfx('crash'); } d.wobA = 0.4; }
+    d.wasLev = levNow;
+    d.boiling = T >= 100 && !levNow;
+    let rate;
+    if (T < 100) rate = 0.12 * Math.max(0, (T - 20) / 80) + (T > 80 ? (T - 80) * 0.35 : 0);
+    else if (levNow) rate = 0.32;
+    else rate = 5 + 14 * Math.min(1, (T - 100) / 93);
+    d.r -= rate * dt;
+    d.wobP += dt * 13; d.wobA *= Math.exp(-dt * 2.2);
+    if (d.hopY < 0 || d.hopV !== 0) {
+      d.hopV += 1500 * dt; d.hopY += d.hopV * dt;
+      if (d.hopY >= 0) { d.hopY = 0; d.hopV = Math.abs(d.hopV) > 70 ? -Math.abs(d.hopV) * 0.35 : 0; d.wobA = Math.max(d.wobA, 0.2); }
+    }
+    if (levNow) {
+      d.kick -= dt;
+      if (d.kick <= 0) { d.vx += (rand() - .5) * 240; d.kick = 0.5 + rand() * 1.2; d.wobA = Math.max(d.wobA, 0.12); }
+      d.vx *= Math.exp(-dt * 0.25); d.vx = clamp(d.vx, -200, 200);
+    } else d.vx *= Math.exp(-dt * 8);
+    d.x += d.vx * dt;
+    const rx = d.r * (1.25 - 0.2 * d.lev);
+    if (d.x < PAN_L + rx + 4) { d.x = PAN_L + rx + 4; d.vx = Math.abs(d.vx) * 0.85; d.wobA = 0.3; }
+    if (d.x > PAN_R - rx - 4) { d.x = PAN_R - rx - 4; d.vx = -Math.abs(d.vx) * 0.85; d.wobA = 0.3; }
+    const g = geom(d, t);
+    if (d.boiling) {
+      d.bubT -= dt;
+      if (d.bubT <= 0) { d.bubbles.push({ dx: rand() * 1.5 - .75, h: 1, r: 1.5 + rand() * 2.5, v: 30 + rand() * 40 }); d.bubT = 0.04 + rand() * 0.08; }
+      if (rand() < dt * 9) burst(g.cx + (rand() - .5) * g.rx, g.bottom - g.ry * 0.5, 1, 0.8);
+      d.hissT -= dt;
+      if (d.hissT <= 0) { addPopup(g.cx + (rand() - .5) * 60, g.yc - g.ry - 30, ['tsss!', 'hiss!', 'pop!'][rand() * 3 | 0], PAL.red, 34 + rand() * 6); S.sfx('sizzle', { gain: 0.35 }); d.hissT = 0.8 + rand() * 0.6; }
+    }
+    for (const b of d.bubbles) { b.h += b.v * dt; b.r += dt * 3; }
+    d.bubbles = d.bubbles.filter(b => {
+      const x = g.cx + b.dx * g.rx, room = g.bottom - topAt(g, x);
+      if (b.h + b.r > room) { if (rand() < 0.25) spatter.push({ x, y: g.bottom - room, vx: (rand() - .5) * 120, vy: -120 - rand() * 120, age: 0, r: 1.8 }); return false; }
+      return d.boiling || b.h < room * 0.5;
+    });
+    d.steamT -= dt;
+    const steamRate = d.boiling ? 9 : levNow ? 2.2 : (T > 55 ? 0.35 : 0);
+    if (steamRate > 0 && d.steamT <= 0) {
+      if (levNow) { const side = rand() < .5 ? -1 : 1; addWisp(g.cx + side * g.rx * 0.95, g.bottom - 4, 5, 1.6, 0.45); }
+      else addWisp(g.cx + (rand() - .5) * g.rx * 1.4, g.yc - g.ry, d.boiling ? 8 : 4, d.boiling ? 2.2 : 1.8, d.boiling ? 0.6 : 0.3);
+      d.steamT = 1 / steamRate * (0.6 + rand() * 0.8);
+    }
+  }
+  const rest = drops.filter(d => d.state === 'rest');
+  for (let i = 0; i < rest.length; i++) for (let j = i + 1; j < rest.length; j++) {
+    const a = rest[i], b = rest[j], ra = a.r * (1.25 - 0.2 * a.lev), rb = b.r * (1.25 - 0.2 * b.lev);
+    const dx = b.x - a.x, ov = ra + rb + 3 - Math.abs(dx);
+    if (ov > 0) { const s = dx >= 0 ? 1 : -1; a.x -= s * ov / 2; b.x += s * ov / 2; if ((b.vx - a.vx) * s < 0) { const tv = a.vx; a.vx = b.vx * 0.9; b.vx = tv * 0.9; a.wobA = b.wobA = 0.3; } }
+  }
+  // the magnifier follows one drop (prefer a floating one)
+  const live = drops.filter(d => d.state === 'rest');
+  let tgt = live.find(d => d.id === ZOOM.id && (d.lev > 0.5 || !live.some(e => e.lev > 0.5)));
+  if (!tgt) tgt = live.find(d => d.lev > 0.5) || live[0];
+  if (tgt) {
+    if (ZOOM.a < 0.05) ZOOM.x = tgt.x;
+    ZOOM.id = tgt.id; const g = geom(tgt, t);
+    ZOOM.x += (tgt.x - ZOOM.x) * Math.min(1, dt * 10); ZOOM.y += (g.bottom - 8 - ZOOM.y) * Math.min(1, dt * 10);
+    ZOOM.r += (g.rx + 12 - ZOOM.r) * Math.min(1, dt * 6);
+  }
+  ZOOM.a += ((tgt ? 1 : 0) - ZOOM.a) * Math.min(1, dt * 5);
+  drops = drops.filter(d => {
+    if (d.state === 'rest' && d.r < 6.5) { puffs.push({ x: d.x, y: SURF - 10, age: 0, k: 40000 + d.id }); if (d.boiling) { addPopup(d.x, SURF - 60, 'pfft', C_STEAM, 34); S.sfx('puff'); } return false; }
+    return true;
+  });
+  for (const w of wisps) { w.age += dt; w.y -= 46 * dt; } wisps = wisps.filter(w => w.age < w.life);
+  for (const s of spatter) { s.age += dt; s.vy += 900 * dt; s.x += s.vx * dt; s.y += s.vy * dt; }
+  spatter = spatter.filter(s => !(s.vy > 0 && s.y > SURF && s.x > PAN_L - 40 && s.x < PAN_R + 40) && s.y < 720 && s.age < 2);
+  for (const p of popups) p.age += dt; popups = popups.filter(p => p.age < 1.0);
+  for (const p of puffs) p.age += dt; puffs = puffs.filter(p => p.age < 1.1);
+}
+
+/* ----------------------------------------------------------------- drawing */
+function drawStove(t, fl) {
+  const ctx = S.ctx;
+  if (fl > 0.01) { const g = ctx.createRadialGradient(620, 660, 10, 620, 660, 300); g.addColorStop(0, `rgba(255,150,60,${0.22 * fl})`); g.addColorStop(1, 'rgba(255,150,60,0)'); ctx.fillStyle = g; ctx.fillRect(300, 420, 640, 320); }
+  const body = [[250, 714], [1010, 714], [1004, 752], [256, 752]];
+  wash(body, [196, 180, 160], 0.5, { key: 101 }); hatch(body, { key: 102, sp: 9, alpha: 0.22 });
+  ink([[236, 714], [1024, 714]], { key: 103, w: 2.8 }); ink([[256, 752], [1004, 752]], { key: 104, w: 1.6, alpha: 0.6 });
+  wash(ell(930, 733, 13, 12), [60, 55, 55], 0.6, { key: 105 }); ink(ell(930, 733, 13, 12, 20), { key: 106, closed: true, w: 1.8 });
+  ink([[930, 733], [930 + 10 * Math.cos(-2.4 + fl * 1.8), 733 + 10 * Math.sin(-2.4 + fl * 1.8)]], { key: 107, w: 2 });
+  ink([[404, 624], [398, 714]], { key: 108, w: 3.2 }); ink([[836, 624], [842, 714]], { key: 109, w: 3.2 });
+  ink([[380, 622], [420, 622]], { key: 110, w: 3 }); ink([[820, 622], [860, 622]], { key: 111, w: 3 });
+  const burner = [[448, 682], [792, 682], [800, 700], [800, 714], [440, 714], [440, 700]];
+  wash(burner, [70, 64, 64], 0.65, { key: 112 }); ink(burner, { key: 113, closed: true, w: 2 });
+  for (let x = 470; x <= 770; x += 37.5) ink([[x - 4, 684], [x + 4, 684]], { key: 114 + x, w: 2.4, alpha: 0.8 });
+}
+function drawFlames(t, fl) {
+  if (fl < 0.02) return;
+  const ctx = S.ctx; ctx.save(); ctx.beginPath(); ctx.rect(0, 623, 1600, 200); ctx.clip();
+  for (let i = 0; i < 9; i++) {
+    const x = 470 + i * 37.5, h = 60 * fl * (0.78 + 0.22 * Math.sin(t * 9 + i * 1.7) + 0.1 * Math.sin(t * 23 + i * 3.1)), sw = 6 * Math.sin(t * 6 + i * 2) * fl;
+    const outer = [[x - 13, 682], [x - 15, 682 - h * 0.35], [x - 7 + sw * 0.5, 682 - h * 0.72], [x + sw, 682 - h], [x + 8 + sw * 0.5, 682 - h * 0.7], [x + 15, 682 - h * 0.35], [x + 13, 682], [x, 686]];
+    wash(outer, PAL.orange, 0.55, { key: 200 + i * 5, sp: 1.6 });
+    wash(outer.map(p => [x + (p[0] - x) * 0.72, 682 + (p[1] - 682) * 0.62]), PAL.yellow, 0.5, { key: 201 + i * 5, sp: 1.4, edge: false });
+    wash(outer.map(p => [x + (p[0] - x) * 0.55, 682 + (p[1] - 682) * 0.34]), PAL.blue, 0.55, { key: 202 + i * 5, sp: 1.2 });
+    ink(outer, { key: 203 + i * 5, closed: true, w: 1.4, alpha: 0.55, j: 1 });
+  }
+  ctx.restore();
+}
+const PAN_METAL = [[330, 494], [372, 606], [392, 622], [848, 622], [868, 606], [910, 494], [896, 494], [856, 600], [384, 600], [344, 494]];
+const PAN_BACK = [[344, 494], [384, 600], [856, 600], [896, 494]];
+const HANDLE = [[906, 506], [1062, 481], [1078, 488], [1078, 504], [1064, 510], [908, 530]];
+function drawPanBack(t, heat) {
+  const ctx = S.ctx;
+  wash(PAN_BACK, [175, 172, 175], 0.22, { key: 300, edge: false });
+  for (let i = 0; i < 5; i++) { const x = 400 + i * 110; ink([[x, 512], [x + 6, 560], [x + 4, 592]], { key: 301 + i, w: 1, alpha: 0.18, passes: 1 }); }
+  if (heat > 0.05) {
+    ctx.save(); ctx.lineCap = 'round';
+    for (let i = 0; i < 6; i++) {
+      const x0 = 420 + i * 78, ph = t * 2.2 + i * 1.3, rise = ((t * 0.5 + i * 0.37) % 1);
+      ctx.strokeStyle = `rgba(230,120,60,${0.22 * heat * Math.sin(Math.PI * rise)})`; ctx.lineWidth = 1.6; ctx.beginPath();
+      for (let k = 0; k <= 12; k++) { const y = 590 - rise * 50 - k * 6, x = x0 + Math.sin(ph + k * 0.8) * 4; k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+function drawPanFront(t, heat) {
+  wash(PAN_METAL, C_METAL, 0.72, { key: 310, sp: 1.4 });
+  if (heat > 0.01) wash(PAN_METAL, C_HOT, 0.62 * heat, { key: 311, sp: 1.6, edge: false, op: 'source-over' });
+  hatch(PAN_METAL, { key: 312, sp: 6, alpha: 0.4 });
+  ink(PAN_METAL, { key: 313, closed: true, w: 2.6 });
+  if (heat > 0.01) ink([[386, 600], [854, 600]], { key: 314, w: 3.5, color: 'rgba(255,120,40,0.9)', alpha: heat, passes: 1, j: 0.5 });
+  wash(HANDLE, PAL.wood, 0.8, { key: 320 }); hatch(HANDLE, { key: 321, sp: 5, alpha: 0.35, ang: 0.3 }); ink(HANDLE, { key: 322, closed: true, w: 2.4 });
+  ink(ell(1062, 495, 5, 4.5, 14), { key: 323, closed: true, w: 1.6 });
+  for (const [k, y] of [[324, 512], [325, 522]]) { wash(ell(920, y, 3.2, 3.2, 10), [200, 200, 205], 0.9, { key: k + 10, sp: 0.5 }); ink(ell(920, y, 3.2, 3.2, 10), { key: k, closed: true, w: 1.3 }); }
+}
+function drawPipette(p) {
+  const ctx = S.ctx, a = p.age < 0.35 ? p.age / 0.35 : p.age < 1.0 ? 1 : 1 - (p.age - 1.0) / 0.6;
+  if (a <= 0) return;
+  const squeeze = p.age > 0.35 && p.age < 0.7 ? Math.sin((p.age - 0.35) / 0.35 * Math.PI) : 0;
+  const x = p.x, lift = (1 - smooth(p.age / 0.35)) * -30 + smooth((p.age - 1.0) / 0.6) * -30, k = p.key;
+  ctx.save(); ctx.globalAlpha = clamp(a, 0, 1); ctx.translate(0, lift);
+  wash([[x - 6, 318], [x + 6, 318], [x + 6, 338], [x + 2, 358], [x - 2, 358], [x - 6, 338]], C_WATER, 0.6, { key: k, sp: 0.8 });
+  ink([[x - 7, 282], [x + 7, 282], [x + 7, 338], [x + 2, 360], [x - 2, 360], [x - 7, 338]], { key: k + 1, closed: true, w: 1.8, j: 0.8 });
+  ink([[x - 3, 290], [x - 3, 330]], { key: k + 2, w: 2, color: '#ffffff', alpha: 0.8, passes: 1, j: 0.4 });
+  const bulb = ell(x, 258 + squeeze * 3, 16 + squeeze * 3, 26 - squeeze * 5, 22);
+  wash(bulb, PAL.rubber, 0.7, { key: k + 3 }); ink(bulb, { key: k + 4, closed: true, w: 2 });
+  ink([[x - 11, 280], [x + 11, 280]], { key: k + 5, w: 3 });
+  ink([[x - 6, 246], [x - 3, 264]], { key: k + 6, w: 2.4, color: '#ffffff', alpha: 0.7, passes: 1 });
+  ctx.restore();
+}
+function drawDrop(d, t, heat) {
+  const ctx = S.ctx, k = 1000 + d.id * 40;
+  if (d.state === 'fall') {
+    const r = d.r * 0.8, cx = d.x, cy = d.y, pts = [[cx, cy - 2.3 * r], [cx, cy - 2.3 * r]];
+    for (let i = 0; i <= 14; i++) { const a = -Math.PI / 3 + i / 14 * (Math.PI * 5 / 3); pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
+    wash(pts, C_WATER, 0.62, { key: k, sp: 1 }); wash(ell(cx + 2, cy + r * 0.3, r * 0.6, r * 0.5, 16), C_WATER_D, 0.25, { key: k + 1, edge: false, sp: 1 });
+    ink(pts, { key: k + 2, closed: true, w: 2.2, j: 0.9 });
+    ink([[cx - r * 0.55, cy - r * 0.1], [cx - r * 0.35, cy - r * 0.55]], { key: k + 3, w: 3, color: '#fff', alpha: 0.9, passes: 1, j: 0.3 });
+    for (let i = -1; i <= 1; i++) ink([[cx + i * 10, cy - 2.3 * r - 14 - Math.abs(i) * 6], [cx + i * 10, cy - 2.3 * r - 36 - Math.abs(i) * 6]], { key: k + 5 + i, w: 1.6, alpha: 0.6, passes: 1 });
+    return;
+  }
+  const g = geom(d, t), pts = dropPts(g);
+  if (d.lev > 0.05) {
+    wash(ell(g.cx, SURF - 1, g.rx * 0.85, 2.5, 18), [60, 50, 50], 0.25 * d.lev, { key: k + 4, edge: false, sp: 0.8 });
+    ctx.save(); ctx.globalAlpha = d.lev; ctx.lineCap = 'round'; ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath(); ctx.ellipse(g.cx, (g.bottom + SURF) / 2, g.rx * 0.8, Math.max(1, g.gap / 2), 0, 0, Math.PI * 2); ctx.fill();
+    for (let s = -1; s <= 1; s += 2) for (let i = 0; i < 2; i++) {
+      const u = (t * 1.6 + i * 0.5 + d.id * 0.3) % 1, x = g.cx + s * (4 + u * g.rx * 0.95), y = (g.bottom + SURF) / 2;
+      ctx.strokeStyle = `rgba(90,110,140,${0.75 * Math.sin(Math.PI * u)})`; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(x - s * 7, y); ctx.lineTo(x, y); ctx.lineTo(x - s * 3, y - 2.5); ctx.moveTo(x, y); ctx.lineTo(x - s * 3, y + 2.5); ctx.stroke();
+    }
+    ctx.restore();
+    const sp = Math.abs(d.vx);
+    if (sp > 45 && d.lev > 0.6) {
+      const s = Math.sign(d.vx), len = Math.min(40, sp * 0.18);
+      for (let i = 0; i < 3; i++) { const y = g.yc - g.ry * 0.6 + i * g.ry * 0.55, x0 = g.cx - s * (g.rx + 8 + i * 4); ink([[x0, y], [x0 - s * len, y]], { key: k + 10 + i, w: 1.6, alpha: 0.55 * clamp((sp - 45) / 60, 0, 1), passes: 1 }); }
+    }
+  }
+  wash(pts, C_WATER, 0.6, { key: k + 20, sp: 1.2 });
+  wash(dropPts({ ...g, rx: g.rx * 0.7, ry: g.ry * 0.55, yc: g.yc + g.ry * 0.12 }, 20), C_WATER_D, 0.28, { key: k + 21, edge: false, sp: 1 });
+  if (heat > 0.05) { ctx.save(); ctx.globalAlpha = heat * 0.7; ctx.strokeStyle = 'rgba(255,120,50,0.7)'; ctx.lineWidth = 2.2; ctx.beginPath(); ctx.ellipse(g.cx, g.yc, g.rx * 0.86, g.ry * g.f * 0.8 + 0.1, 0, 0.25, Math.PI - 0.25); ctx.stroke(); ctx.restore(); }
+  for (const b of d.bubbles) {
+    const x = g.cx + b.dx * g.rx, y = g.bottom - b.h;
+    ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.beginPath(); ctx.arc(x, y, b.r, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = 'rgba(40,70,120,0.7)'; ctx.lineWidth = 1; ctx.stroke(); ctx.restore();
+  }
+  ink(pts, { key: k + 22, closed: true, w: 2.3, j: 0.9 });
+  S.highlight(g.cx - g.rx * 0.12, g.yc - g.ry * 0.05, g.rx * 0.62, g.ry * 0.68);
+  ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(g.cx + g.rx * 0.35, g.yc - g.ry * 0.55, 2.2, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+}
+function drawWisps() {
+  const ctx = S.ctx; ctx.save(); ctx.lineCap = 'round';
+  for (const w of wisps) {
+    const u = w.age / w.life; ctx.strokeStyle = rgba(C_STEAM, w.a * Math.sin(Math.PI * u)); ctx.lineWidth = 2 - u; ctx.beginPath();
+    for (let k = 0; k <= 9; k++) { const y = w.y - k * 6, x = w.x + Math.sin(k * 0.75 + w.age * 3 + w.s) * w.amp * (0.3 + k / 9); k ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawSpatter() {
+  const ctx = S.ctx; ctx.save();
+  for (const s of spatter) { ctx.fillStyle = rgba(C_WATER, 0.85); ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill(); ctx.strokeStyle = 'rgba(42,33,24,0.6)'; ctx.lineWidth = 0.9; ctx.stroke(); }
+  ctx.restore();
+}
+function drawPopups() {
+  for (const p of popups) {
+    const u = p.age, s = u < 0.15 ? 0.6 + u / 0.15 * 0.5 : 1.1 - Math.min(0.1, (u - 0.15));
+    txt(p.s, p.x, p.y - u * 26, { size: p.size, weight: 700, color: rgba(p.col, 1), alpha: 1 - smooth((u - 0.6) / 0.4), rot: p.rot, scale: s, align: 'center', key: p.k });
+  }
+  for (const p of puffs) {
+    const u = p.age / 1.1;
+    for (let i = 0; i < 5; i++) { const a = -Math.PI / 2 + (i - 2) * 0.55, rr = 8 + u * 28; ink(ell(p.x + Math.cos(a) * rr, p.y - 8 + Math.sin(a) * rr, 6 + u * 6, 5 + u * 5, 12), { key: p.k * 7 + i, closed: true, w: 1.4, alpha: 0.6 * (1 - u), passes: 1, color: rgba(C_STEAM, 1) }); }
+  }
+}
+const yOfT = v => 668 - (v / 300) * (668 - 272);
+function drawThermometer() {
+  const x = 120, glass = [[x - 12, 262], [x - 6, 250], [x + 6, 250], [x + 12, 262], [x + 12, 680], [x - 12, 680]], yT = yOfT(T);
+  wash(glass, [210, 230, 240], 0.3, { key: 400, edge: false });
+  wash([[x - 5, 690], [x - 5, yT], [x + 5, yT], [x + 5, 690]], PAL.red, 0.8, { key: 401, sp: 0.7 });
+  wash(ell(x, 702, 22, 22, 24), PAL.red, 0.8, { key: 402 });
+  ink(glass.slice(0, 5).concat([[x + 12, 680]]), { key: 403, w: 2.2 }); ink([[x - 12, 680], [x - 12, 262]], { key: 404, w: 2.2 });
+  ink(ell(x, 702, 27, 27, 26, -0.9), { key: 405, closed: true, w: 2.4 });
+  ink([[x - 7, 692], [x - 12, 706]], { key: 406, w: 3, color: '#fff', alpha: 0.7, passes: 1 }); ink([[x - 6, 300], [x - 6, 660]], { key: 407, w: 2, color: '#fff', alpha: 0.6, passes: 1 });
+  for (let v = 0; v <= 300; v += 25) {
+    const y = yOfT(v), major = v % 100 === 0;
+    ink([[x - 12, y], [x - 12 - (major ? 14 : 7), y]], { key: 410 + v, w: major ? 2 : 1.3, passes: 1 });
+    if (major) txt(v + '°', x - 30, y + 9, { size: 29, weight: 700, align: 'right', key: 411 + v });
+  }
+  const y100 = yOfT(100), yL = yOfT(LEID);
+  ink([[x + 12, y100], [x + 26, y100]], { key: 420, w: 2 }); txt('boils', x + 30, y100 + 9, { size: 30, weight: 700, key: 421, color: '#2f4f7a' });
+  ink([[x + 12, yL], [x + 26, yL]], { key: 422, w: 2.4, color: INK_RED });
+  txt('Leidenfrost', x + 30, yL + 1, { size: 31, weight: 700, key: 423, color: INK_RED }); txt('point ≈ 193°', x + 30, yL + 30, { size: 28, weight: 600, key: 424, color: INK_RED });
+  txt(Math.round(T) + ' °C', x, 772, { size: 44, weight: 700, align: 'center', key: 425 });
+}
+function drawInset(t, heat) {
+  const ctx = S.ctx, { x: cx, y: cy, r } = INSET;
+  const wW = 1 - smooth((T - 96) / 8), wL = smooth((T - 188) / 8), wB = clamp(1 - wW - wL, 0, 1);
+  if (ZOOM.a > 0.02) {
+    const [zx, zy] = toScreen(ZOOM.x, ZOOM.y), zr = ZOOM.r * PS, dx = cx - zx, dy = cy - zy, L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L, za = ZOOM.a;
+    ink([[zx + nx * zr, zy + ny * zr * 0.8], [cx + nx * r, cy + ny * r]], { key: 500, w: 1.4, alpha: 0.4 * za, passes: 1, dash: [8, 8] });
+    ink([[zx - nx * zr, zy - ny * zr * 0.8], [cx - nx * r, cy - ny * r]], { key: 501, w: 1.4, alpha: 0.4 * za, passes: 1, dash: [8, 8] });
+    ink(ell(zx, zy, zr, zr * 0.8, 24), { key: 502, closed: true, w: 2, alpha: 0.65 * za });
+  }
+  ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = 'rgba(250,245,232,0.92)'; ctx.fillRect(cx - r, cy - r, 2 * r, 2 * r);
+  const ys = cy + 72, surf = [];
+  for (let i = 0; i <= 40; i++) { const x = cx - r + i * (2 * r / 40); surf.push([x, ys + (i % 2 ? 3.5 : -1.5) + Math.sin(i * 1.7) * 1.5]); }
+  const metal = surf.concat([[cx + r, cy + r], [cx - r, cy + r]]);
+  wash(metal, C_METAL, 0.6, { key: 510, sp: 1 });
+  if (heat > 0.01) wash(metal, C_HOT, 0.6 * heat, { key: 511, sp: 1.2, edge: false, op: 'source-over' });
+  hatch(metal, { key: 512, sp: 7, alpha: 0.35 });
+  for (let i = 0; i < 4; i++) {
+    const x = cx - 110 + i * 72, u = (t * 0.8 + i * 0.27) % 1, pts = [];
+    for (let k = 0; k <= 8; k++) pts.push([x + Math.sin(k * 1.2 + t * 4 + i) * 4, cy + r - 12 - u * 40 - k * 5]);
+    ctx.save(); ctx.globalAlpha *= (0.3 + 0.7 * heat) * Math.sin(Math.PI * u); ink(pts, { key: 513 + i, w: 2, color: '#ffd9a0', passes: 1, j: 0.4 }); ctx.restore();
+  }
+  txt('hot pan', cx, cy + r - 30, { size: 36, weight: 700, align: 'center', color: '#fff4e0', key: 520 });
+  const gap = wL * 26 + wL * 3 * Math.sin(t * 7);
+  const g = { cx, rx: 158, ry: 175, f: lerp(0.2, 0.5, wL), bottom: ys - gap }; g.yc = g.bottom - g.ry * g.f;
+  const dp = dropPts(g, 44);
+  wash(dp, C_WATER, 0.42, { key: 530, sp: 1.5 });
+  wash(dropPts({ ...g, rx: 120, ry: 120, yc: g.yc + 20 }, 30), C_WATER_D, 0.18, { key: 531, edge: false });
+  ink(dp, { key: 532, closed: true, w: 2.8, j: 1 });
+  txt('water', cx - 64, cy - 92, { size: 34, weight: 700, color: INK_BLUE, key: 533, rot: -0.08 });
+  if (wW > 0.01) {
+    ctx.save(); ctx.globalAlpha = wW;
+    for (let i = 0; i < 3; i++) { const a0 = t * 1.2 + i * 2.1; ctx.strokeStyle = 'rgba(40,80,140,0.45)'; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.ellipse(cx - 60 + i * 60, ys - 55, 22, 14, 0, a0, a0 + 4.2); ctx.stroke(); }
+    txt('just sits there', cx, cy - 22, { size: 36, weight: 700, align: 'center', key: 540, alpha: clamp((wW - 0.6) / 0.4, 0, 1) / Math.max(wW, 0.01) });
+    ctx.restore();
+  }
+  if (wB > 0.01) {
+    ctx.save(); ctx.globalAlpha = wB; ctx.beginPath(); S.trace(dp, true); ctx.rect(cx - r, ys - 4, 2 * r, 20); ctx.clip();
+    [-120, -80, -35, 10, 55, 95, 130].forEach((sx, i) => {
+      const ph = (t * 1.7 + i * 0.37) % 1; let br, by;
+      if (ph < 0.45) { br = 3 + 13 * (ph / 0.45); by = ys - br; } else { br = 16 + (ph - 0.45) * 6; by = ys - 16 - (ph - 0.45) / 0.55 * 170; }
+      const bx = cx + sx + (ph > .45 ? Math.sin(ph * 20) * 3 : 0);
+      ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      ink(ell(bx, by, br, br, 14), { key: 550 + i, closed: true, w: 1.6, passes: 1, j: 0.5, alpha: 0.8 });
+    });
+    txt('boils on contact!', cx, cy - 22, { size: 36, weight: 700, align: 'center', key: 560, alpha: clamp((wB - 0.6) / 0.4, 0, 1) / Math.max(wB, 0.01) });
+    ctx.restore();
+  }
+  if (wL > 0.01) {
+    ctx.save(); ctx.globalAlpha = wL;
+    const mid = (g.bottom + ys) / 2;
+    ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.beginPath(); ctx.moveTo(cx - r, ys); ctx.lineTo(cx + r, ys); ctx.lineTo(cx + r, g.bottom); ctx.lineTo(cx - r, g.bottom); ctx.fill();
+    for (let s = -1; s <= 1; s += 2) for (let i = 0; i < 4; i++) {
+      const u = (t * 0.55 + i / 4) % 1, x = cx + s * (12 + u * 150);
+      ctx.save(); ctx.globalAlpha = wL * Math.sin(Math.PI * u);
+      arrow(x - s * 22, mid + Math.sin(u * 12 + i) * 2, x, mid + Math.sin(u * 12 + i + 1) * 2, { key: 570 + i * 3 + (s + 1) * 10, w: 1.6, head: 6, passes: 1, color: '#4c5e7a' });
+      ctx.restore();
+    }
+    for (let s = -1; s <= 1; s += 2) for (let i = 0; i < 2; i++) {
+      const u = (t * 0.7 + i * 0.5) % 1, pts = [];
+      for (let k = 0; k <= 8; k++) pts.push([cx + s * (g.rx + 4 + k * 2) + Math.sin(k * 0.9 + t * 3) * 4, mid - u * 60 - k * 6]);
+      ctx.save(); ctx.globalAlpha = wL * Math.sin(Math.PI * u) * 0.8; ink(pts, { key: 590 + i + (s + 1) * 3, w: 1.8, passes: 1, color: rgba(C_STEAM, 1), j: 0.5 }); ctx.restore();
+    }
+    ctx.globalAlpha = clamp((wL - 0.6) / 0.4, 0, 1);
+    txt('floats on steam!', cx, cy - 22, { size: 36, weight: 700, align: 'center', key: 600 });
+    arrow(cx + 30, cy - 6, cx + 12, mid - 3, { key: 602, w: 2.4, head: 11, bend: -0.2 });
+    ctx.restore();
+  }
+  ctx.restore();
+  ink(ell(cx, cy, r, r, 48, -1.2), { key: 610, closed: true, w: 3.4, j: 1.2 });
+  ink(ell(cx, cy, r + 7, r + 7, 48, 2), { key: 611, closed: true, w: 1.3, alpha: 0.5, passes: 1 });
+  txt('up close', cx, cy - r - 18, { size: 36, weight: 700, align: 'center', key: 612, rot: -0.02 });
+}
+const LIFE_PTS = [[20, 0.86], [60, 0.8], [100, 0.62], [130, 0.28], [155, 0.09], [175, 0.06], [188, 0.16], [198, 0.55], [210, 0.84], [240, 0.8], [300, 0.58]];
+const lifeAt = S.keys(LIFE_PTS, 'linear');
+function drawChart(t) {
+  const x0 = 1160, x1 = 1460, y0 = 768, yTop = 632, hh = 124;
+  const X = v => x0 + (clamp(v, 20, 300) - 20) / 280 * (x1 - x0 - 12), Y = l => y0 - l * hh;
+  txt('How long a drop lasts', 1310, 600, { size: 36, weight: 700, align: 'center', key: 700 });
+  arrow(x0, y0, x1, y0, { key: 701, w: 2, head: 10 }); arrow(x0, y0, x0, yTop - 6, { key: 703, w: 2, head: 10 });
+  txt('hotter pan →', x1, y0 + 34, { size: 30, weight: 700, align: 'right', key: 705 });
+  ink([[X(LEID), y0], [X(LEID), yTop + 4]], { key: 707, w: 1.4, dash: [5, 6], alpha: 0.6, color: INK_RED, passes: 1 });
+  const pts = []; for (let v = 20; v <= 300; v += 7) pts.push([X(v), Y(lifeAt(v))]);
+  ink(pts, { key: 711, w: 2.6, seg: 10, color: INK_BLUE, j: 0.8 });
+  txt('seconds', X(62), Y(0.2), { size: 30, weight: 700, align: 'center', key: 712, color: INK_RED });
+  arrow(X(62) + 44, Y(0.2) - 8, X(163), Y(0.08), { key: 717, w: 1.8, head: 9, bend: 0.25, color: INK_RED, passes: 1 });
+  txt('a minute+', X(258), Y(0.84) - 14, { size: 30, weight: 700, align: 'center', key: 713, color: INK_BLUE });
+  const hl = S.ease(t, C.moral.at + 0.2, C.moral.at + 1.0);
+  if (hl > 0) {
+    const ctx = S.ctx; ctx.save(); ctx.globalAlpha = hl;
+    wash(ell(X(203), Y(0.45), 40, 52, 22), PAL.yellow, 0.35, { key: 720, sp: 3, edge: false });
+    ink(ell(X(203), Y(0.45), 42 * (0.3 + 0.7 * hl), 55 * (0.3 + 0.7 * hl), 30, -2), { key: 721, closed: true, w: 3, color: INK_RED });
+    ctx.restore();
+  }
+  const cxp = X(T), cyp = Y(lifeAt(T));
+  ink([[cxp, cyp + 8], [cxp, y0]], { key: 714, w: 1, dash: [3, 5], alpha: 0.5, passes: 1 });
+  wash(ell(cxp, cyp, 8, 8, 14), PAL.red, 0.9, { key: 715, sp: 0.8 }); ink(ell(cxp, cyp, 8, 8, 14), { key: 716, closed: true, w: 1.8 });
+}
+
+function draw(t) {
+  const ctx = S.ctx, fl = flameAt(t), heat = smooth((T - 140) / 110);
+  S.title('The Leidenfrost Effect', 'why water dances on a scorching-hot pan', { reveal: S.ease(t, 0.1, 1.9) });
+  ctx.save(); ctx.translate(PX, PY); ctx.scale(PS, PS); ctx.translate(-PX, -PY);
+  drawStove(t, fl); drawFlames(t, fl); drawPanBack(t, heat); drawPanFront(t, heat);
+  for (const d of drops) if (d.state === 'rest') drawDrop(d, t, heat);
+  drawSpatter();
+  for (const d of drops) if (d.state === 'fall') drawDrop(d, t, heat);
+  drawWisps(); for (const p of pipettes) drawPipette(p); drawPopups();
+  ctx.restore();
+  drawThermometer(); drawInset(t, heat); drawChart(t);
+}
+
+S.run({
+  duration: TOTAL, init, update, draw,
+  // continuous foley beds (0..1) — see scripts/sfx.mjs
+  state: t => ({
+    rumble: flameAt(t),
+    crackle: Math.min(1, drops.filter(d => d.boiling && d.state === 'rest').length / 1.5),
+    hiss: 0.35 * Math.min(1, drops.filter(d => d.state === 'rest' && d.lev > 0.5).length / 2),
+  }),
+  onClick: (x, y) => { const px = PX + (x - PX) / PS; if (px > 300 && px < 950 && pipettes.length < 4) addPipette(clamp(px, PAN_L + 40, PAN_R - 40), 26 + rand() * 8); },
+});
+</script>
+</body>
+</html>

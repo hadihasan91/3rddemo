@@ -1,0 +1,15 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-3%",
+  "lead": 0.6,
+  "tail": 2.6,
+  "lines": [
+    { "id": "intro", "text": "Ever flicked water onto a hot pan, and watched it dance? That's the Leidenfrost effect." },
+    { "id": "warm",  "text": "On a warm pan, a drop of water just sits there, slowly evaporating.", "pauseBefore": 0.4 },
+    { "id": "boil",  "text": "Heat the pan past 100 degrees, and the drop sizzles. It touches the metal, bubbles of steam burst out, and it's gone in seconds.", "pauseBefore": 0.5 },
+    { "id": "leid",  "text": "But keep heating. Past roughly 193 degrees Celsius, something strange happens. The bottom of the drop turns to steam instantly, and the drop floats on its own cushion of vapor.", "pauseBefore": 0.75 },
+    { "id": "leid2", "text": "It never touches the pan. That thin layer of steam insulates it, so the drop skates around, lasting a minute or more.", "pauseBefore": 0.4 },
+    { "id": "cool",  "text": "Let the pan cool, and the cushion collapses. The drop crashes down, and boils away.", "pauseBefore": 0.5 },
+    { "id": "moral", "text": "So, a hotter pan actually makes water last longer. That's the Leidenfrost effect.", "pauseBefore": 0.8 }
+  ]
+}

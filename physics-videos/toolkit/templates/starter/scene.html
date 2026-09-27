@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Starter scene — pendulums keep time</title>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<!-- Paths: a video folder sits next to toolkit/, so the library is ../toolkit/lib/sketch.js.
+     (Inside toolkit/templates/starter it is ../../lib/sketch.js — fix the path when you copy this file.) -->
+<script src="../../lib/sketch.js"></script>
+<script src="cues.js"></script>
+<script>
+/* =============================================================================
+   STARTER SCENE (whiteboard theme). Copy this file, then replace the content.
+   Structure every scene the same way:
+     1. constants + layout      (stage is 1600×1000; keep a ~60px margin;
+                                 captions own the band y > 820)
+     2. timeline from voice cues (C.<id>.at / .end) — never hard-coded seconds
+     3. init()   — reset simulation state (called on start and on every loop)
+     4. update() — advance the deterministic simulation (use S.rand, not Math.random)
+     5. draw()   — pure drawing for time t
+     6. S.run({ duration, init, update, draw, state })
+   ========================================================================== */
+const S = Sketch.init({ theme: 'whiteboard' });
+const { ink, wash, txt, arrow, ell, circle, clamp, ease, lerp, rgba, PAL, INKS } = S;
+const C = window.CUES.lines;
+const TOTAL = window.CUES.total;
+
+/* 1 · layout ------------------------------------------------------------- */
+const PIVOT = [800, 250], LEN = 380;           // hero: a big pendulum, centre stage
+const RIGHT_X = 1260;                          // side panel column
+
+/* 2 · timeline (all derived from the narration) --------------------------- */
+// reveals run one after another (the pen can only be in one place): title 0.1–1.8 s, then the pendulum
+const drawOn = t => ease(t, 1.9, 4.2);
+const amp = S.keys([[0, 0.18], [C.setup.at, 0.18], [C.setup.at + 1.5, 0.62], [C.payoff.at + 3, 0.62], [C.payoff.at + 5, 0.3], [TOTAL, 0.3]]);
+S.captions([
+  [C.hook.at + 1.0, 'Big swing or small swing: same time', { n: 1 }],
+  [C.setup.at + 0.2, 'Farther to go, but it falls faster', { n: 2 }],
+  [C.payoff.at + 0.2, 'They cancel: a steady beat', { n: '!', badge: PAL.yellow }],
+]);
+
+/* 3–4 · simulation ------------------------------------------------------- */
+const g = 9.81, L_m = 1.0, omega = Math.sqrt(g / L_m);   // small-angle period ≈ 2.0 s
+let phase, trail, ticks;
+function init() { phase = 0; trail = []; ticks = 0; }
+function update(dt, t) {
+  const prev = Math.sin(phase);
+  phase += omega * dt;
+  if (Math.sign(Math.sin(phase)) !== Math.sign(prev) && t > 4.2) { ticks++; S.sfx('tick', { gain: 0.8 }); }
+  const th = amp(t) * Math.sin(phase);
+  trail.push([PIVOT[0] + LEN * Math.sin(th), PIVOT[1] + LEN * Math.cos(th)]);
+  if (trail.length > 26) trail.shift();
+}
+
+/* 5 · drawing ------------------------------------------------------------ */
+function draw(t) {
+  S.title('Pendulums keep time', 'why the size of the swing doesn’t matter', { reveal: ease(t, 0.1, 1.8) });
+
+  const d = drawOn(t);
+  // support beam (drawn on first)
+  ink([[PIVOT[0] - 170, PIVOT[1]], [PIVOT[0] + 170, PIVOT[1]]], { key: 'beam', w: 4, progress: ease(d, 0, 0.35) });
+  S.hatch([[PIVOT[0] - 170, PIVOT[1] - 26], [PIVOT[0] + 170, PIVOT[1] - 26], [PIVOT[0] + 170, PIVOT[1]], [PIVOT[0] - 170, PIVOT[1]]], { key: 'beam-h', sp: 10, alpha: 0.4 * ease(d, 0.2, 0.4) });
+
+  const th = amp(t) * Math.sin(phase);
+  const bob = [PIVOT[0] + LEN * Math.sin(th), PIVOT[1] + LEN * Math.cos(th)];
+  // swing arc guide + motion trail
+  if (d > 0.5) {
+    const A = amp(t);
+    ink(S.arc(PIVOT[0], PIVOT[1], LEN, Math.PI / 2 - A, Math.PI / 2 + A, 30), { key: 'guide', w: 1.6, dash: [8, 10], alpha: 0.35, passes: 1, progress: ease(d, 0.5, 0.9) });
+    for (let i = 0; i < trail.length; i++) { const [x, y] = trail[i]; S.ctx.save(); S.ctx.globalAlpha = i / trail.length * 0.25; wash(circle(x, y, 34, 18), PAL.sky, 0.5, { key: 'trail' + i, edge: false, sp: 1 }); S.ctx.restore(); }
+  }
+  // string + bob
+  ink([PIVOT, bob], { key: 'string', w: 2.2, progress: ease(d, 0.35, 0.7) });
+  if (d > 0.7) {
+    const bp = ease(d, 0.7, 1);
+    wash(circle(bob[0], bob[1], 38, 24), PAL.orange, 0.75 * bp, { key: 'bob-w' });
+    ink(circle(bob[0], bob[1], 38, 26), { key: 'bob', closed: true, w: 3, progress: bp });
+    S.highlight(bob[0] - 4, bob[1] - 2, 26, 26);
+  }
+  ink(circle(PIVOT[0], PIVOT[1], 7, 12), { key: 'pivot', closed: true, w: 2.4, progress: ease(d, 0.3, 0.4) });
+
+  // side panel: a big beat counter
+  const pa = ease(t, 4.4, 5.2);
+  if (pa > 0) {
+    S.ctx.save(); S.ctx.globalAlpha = pa;
+    txt('beats', RIGHT_X + 60, 400, { size: 40, weight: 700, align: 'center', key: 'beats-l' });
+    txt(String(ticks), RIGHT_X + 60, 540, { size: 110, weight: 700, align: 'center', key: 'beats-n' + ticks, color: INKS.blue });
+    ink(ell(RIGHT_X + 60, 505, 90, 80, 30, -2), { key: 'beats-ring', closed: true, w: 2.6 });
+    S.ctx.restore();
+  }
+  // labelled arrows, drawn on when the narration mentions them
+  const la = ease(t, C.setup.at + 2.2, C.setup.at + 3.4);
+  if (la > 0) S.label('falls from higher', 380, 420, bob[0] - 40, bob[1] - 30, { reveal: la, color: INKS.red, bend: -0.2 });
+}
+
+/* 6 · run ---------------------------------------------------------------- */
+S.run({ duration: TOTAL, init, update, draw, state: t => ({ hum: 0 }) });
+</script>
+</body>
+</html>
