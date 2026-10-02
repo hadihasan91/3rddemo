@@ -589,7 +589,8 @@ function buildScenes() {
   const digC = IMG.dig ? clip('dig', 760, { caption: 'EXCAVATION, COASTAL PERU' }) : dig();
   s1.push(P(digC, 600, 1190, 11.0, { anim: 'slideR', rot: 0.03 }));
   s1.push(P(textScrap('6,700 YEARS OLD', { font: '96px Abril', bg: RED, fg: CREAM, seed: 6 }), 540, 190, 13.1, { anim: 'slam', rot: -0.05 }));
-  s1.push(F(13.6, (t, u) => markerPath(ovalPts(600, 1190, 330, 160, 31), eOut(u / 0.5), { w: 10 }), { sfx: [[13.6, 'swish', 0.35, 1.3]] }));
+  s1.push(P(popcornSticker(46, 777), 610, 1190, 13.35, { rot: 0.3 }));
+  s1.push(F(13.6, (t, u) => markerPath(ovalPts(605, 1185, 140, 110, 31), eOut(u / 0.5), { w: 10 }), { sfx: [[13.6, 'swish', 0.35, 1.3]] }));
 
   /* 2 · Cretors */
   const s2 = [];
