@@ -313,7 +313,7 @@ function animState(it, t) {
 // generic picture item
 function P(c, x, y, t0, o = {}) { return { kind: 'pic', c, x, y, t0, rot: o.rot || 0, s: o.s || 1, anim: o.anim || 'pop', key: o.key ?? Math.round(x + y), t1: o.t1, exit: o.exit, float: o.float, comp: o.comp, quiet: o.quiet, sfxGain: o.sfxGain }; }
 function Wd(word, x, y, t0, o = {}) { return { kind: 'word', w: word, x, y, t0, dt: o.dt ?? 0.06, rot: o.rot || 0, s: o.s || 1, key: o.key ?? Math.round(x * 3 + y), t1: o.t1, exit: o.exit, align: o.align || 'center' }; }
-function St(c, x, y, t0, o = {}) { return { kind: 'pic', c, x, y, t0, rot: o.rot || 0, s: 1, anim: 'slam', key: o.key ?? Math.round(x + y), comp: 'multiply', t1: o.t1, exit: o.exit, stamp: true }; }
+function St(c, x, y, t0, o = {}) { return { kind: 'pic', c, x, y, t0, rot: o.rot || 0, s: 1, anim: 'slam', key: o.key ?? Math.round(x + y), comp: o.comp || 'multiply', t1: o.t1, exit: o.exit, stamp: true }; }
 function Lb(text, x, y, t0, o = {}) { return { kind: 'label', text, strip: labelStrip(text, o.size || 28), x, y, t0, rot: o.rot || 0, size: o.size || 28, cps: o.cps || 30, key: o.key ?? Math.round(x + y * 2), t1: o.t1, exit: o.exit }; }
 function F(t0, draw, o = {}) { return { kind: 'fn', t0, draw, t1: o.t1, sfx: o.sfx }; }
 
@@ -625,7 +625,7 @@ function buildScenes() {
   s5.push(Lb('FIRST IN PRINT, LONDON', 1250, 400, 44.6, { rot: -0.02 }));
   const sold = clip('soldiers', 600, { caption: 'THE WWI STORY, 1917' });
   s5.push(sold ? P(sold, 1450, 700, 45.95, { anim: 'slideR', rot: 0.04 }) : P(textScrap('WORLD WAR I, 1917', { font: '70px Oswald' }), 1450, 720, 45.95, { anim: 'slideR', rot: 0.04 }));
-  s5.push(St(stamp('TOO LATE', RED, 130), 1460, 720, 48.0, { rot: -0.15 }));
+  s5.push(St(stamp('TOO LATE', '#e0352a', 130), 1460, 720, 48.0, { rot: -0.15, comp: 'source-over' }));
 
   /* --- 6 · global -------------------------------------------------- */
   const s6 = [];
