@@ -1,0 +1,17 @@
+{
+  "voice": "af_heart",
+  "speed": 1.03,
+  "lead": 0.9,
+  "tail": 2.8,
+  "lines": [
+    { "id": "hook",    "text": "Millions of people order French fries every day. But are they actually French?" },
+    { "id": "andes",   "text": "The potato came from the Andes. Spanish ships carried it to Europe, where people called it pig food... or poison.", "pauseBefore": 1.6 },
+    { "id": "belgium", "text": "Belgium says its villagers fried potatoes first, back in the sixteen-eighties. Lovely story. Except potatoes hadn't reached their valley yet.", "pauseBefore": 0.9 },
+    { "id": "france",  "text": "France has the stronger case. In seventeen seventy-two, Paris doctors declared the potato safe to eat, and street vendors on the Pont Neuf started frying them.", "pauseBefore": 1.0 },
+    { "id": "jeff",    "text": "Thomas Jefferson tasted them in Paris. In eighteen-oh-two, his White House served potatoes, in the French manner.", "pauseBefore": 0.9 },
+    { "id": "name",    "text": "French fried potatoes were in print by eighteen fifty-six, long before the famous story about soldiers in World War One.", "pauseBefore": 0.8 },
+    { "id": "global",  "text": "Then came frozen fries, fast food, and the whole planet.", "pauseBefore": 0.8 },
+    { "id": "freedom", "text": "In two thousand three, Congress renamed them freedom fries. It didn't catch on.", "pauseBefore": 0.7 },
+    { "id": "outro",   "text": "So, are they French? Paris made them famous. Belgium made them a religion. And English gave them the name.", "pauseBefore": 1.0 }
+  ]
+}
