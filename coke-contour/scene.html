@@ -1,0 +1,1252 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Why the Bottle Curves</title>
+<style>
+  @font-face { font-family: 'Anton'; src: url(fonts/Anton.woff2) format('woff2'); }
+  @font-face { font-family: 'Playfair Display'; src: url(fonts/PlayfairDisplay.woff2) format('woff2'); font-weight: 400 900; }
+  @font-face { font-family: 'Playfair Display'; src: url(fonts/PlayfairDisplay-Italic.woff2) format('woff2'); font-weight: 400 900; font-style: italic; }
+  @font-face { font-family: 'Special Elite'; src: url(fonts/SpecialElite.woff2) format('woff2'); }
+  @font-face { font-family: 'UnifrakturMaguntia'; src: url(fonts/UnifrakturMaguntia.woff2) format('woff2'); }
+  @font-face { font-family: 'Permanent Marker'; src: url(fonts/PermanentMarker.woff2) format('woff2'); }
+  @font-face { font-family: 'Oswald'; src: url(fonts/Oswald.woff2) format('woff2'); font-weight: 200 700; }
+  @font-face { font-family: 'Old Standard TT'; src: url(fonts/OldStandardTT.woff2) format('woff2'); font-weight: 400; }
+  @font-face { font-family: 'Old Standard TT'; src: url(fonts/OldStandardTT-Bold.woff2) format('woff2'); font-weight: 700; }
+  @font-face { font-family: 'Old Standard TT'; src: url(fonts/OldStandardTT-Italic.woff2) format('woff2'); font-style: italic; }
+  @font-face { font-family: 'Abril Fatface'; src: url(fonts/AbrilFatface.woff2) format('woff2'); }
+  @font-face { font-family: 'Courier Prime'; src: url(fonts/CourierPrime.woff2) format('woff2'); font-weight: 400; }
+  @font-face { font-family: 'Courier Prime'; src: url(fonts/CourierPrime-Bold.woff2) format('woff2'); font-weight: 700; }
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  canvas { display: block; margin: 0 auto; height: 100vh; width: auto; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="1080" height="1920"></canvas>
+<script src="cues.js"></script>
+<script>
+'use strict';
+/* =====================================================================================
+   WHY THE BOTTLE CURVES — newspaper cutout / mixed media explainer, 1080x1920 @ 30fps
+   Everything is drawn procedurally: halftone vessels, ransom type, stamps, torn paper.
+   renderAt(t) is pure for a given t, so frames can be captured in any order.
+   ===================================================================================== */
+window.SCENE_ERRORS = [];
+window.addEventListener('error', e => window.SCENE_ERRORS.push(String(e.message)));
+
+const W = 1080, H = 1920;
+const cv = document.getElementById('stage');
+const g = cv.getContext('2d');
+const C = CUES.lines, TOTAL = CUES.total;
+const VIDEO = /video=1/.test(location.search);
+
+/* ------------------------------------------------------------------ palette */
+const P = {
+  paper: '#ECE2CC', news: '#F2ECDD', ink: '#1C1A17', ink2: '#3A352E', red: '#C9202C', red2: '#951520',
+  kraft: '#BE9867', white: '#FBF8F0', cream: '#F3E8C8', dark: '#141210',
+  green: '#9EC1A6', greenDot: '#1E3226', cola: '#4A3424', colaDot: '#140D09', amber: '#D2A15E', amberDot: '#3B2210',
+  aqua: '#BFD8D2', aquaDot: '#284440', pod: '#D59A45', podDot: '#4A2610', clear: '#DDE7E3', clearDot: '#41504B',
+  tape: 'rgba(238,228,188,0.78)', blue: '#7FA9B8',
+};
+
+/* ------------------------------------------------------------------ math + timing */
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, u) => a + (b - a) * u;
+const ramp = (t, a, b) => clamp((t - a) / (b - a));
+const eio = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+const eout = u => 1 - Math.pow(1 - u, 3);
+const ein = u => u * u * u;
+const eback = u => { const c1 = 1.9, c3 = c1 + 1; return 1 + c3 * Math.pow(u - 1, 3) + c1 * Math.pow(u - 1, 2); };
+const smooth = (a, b, x) => { const u = clamp((x - a) / (b - a)); return u * u * (3 - 2 * u); };
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const at = id => C[id].at, en = id => C[id].end;
+// time a word is spoken, estimated from its character position in the line
+function wordAt(id, word, occ = 0) {
+  const L = C[id], s = L.text.toLowerCase(); let i = -1;
+  for (let k = 0; k <= occ; k++) i = s.indexOf(word.toLowerCase(), i + 1);
+  if (i < 0) throw new Error(`word "${word}" not in line ${id}`);
+  return L.at + L.dur * (i / s.length);
+}
+// stop-motion: everything "boils" on twelves
+let TICK = 0;
+function jit(key, amp = 1) { const r = rng((key * 9973 + TICK * 31337) >>> 0); return [(r() - 0.5) * 2 * amp, (r() - 0.5) * 2 * amp, (r() - 0.5) * 2]; }
+
+/* ------------------------------------------------------------------ sfx timeline (read by sfx.mjs) */
+const EVENTS = [];
+const ev = (t, type, gain = 1, pitch = 1) => EVENTS.push({ t: +t.toFixed(3), type, gain, pitch });
+
+/* ------------------------------------------------------------------ offscreen helpers */
+function mk(w, h) { const c = document.createElement('canvas'); c.width = Math.ceil(w); c.height = Math.ceil(h); return c; }
+const CACHE = new Map();
+function cached(key, fn) { if (!CACHE.has(key)) CACHE.set(key, fn()); return CACHE.get(key); }
+
+// Paper: base colour + fine noise + fibres + soft blotches
+function makePaper(w, h, base, seed, { noise = 14, fibers = 500, blotch = 10, dark = false } = {}) {
+  const c = mk(w, h), x = c.getContext('2d'), r = rng(seed);
+  x.fillStyle = base; x.fillRect(0, 0, w, h);
+  for (let i = 0; i < blotch; i++) {
+    const bx = r() * w, by = r() * h, br = 120 + r() * 420;
+    const gr = x.createRadialGradient(bx, by, 0, bx, by, br);
+    const a = 0.03 + r() * 0.05;
+    gr.addColorStop(0, dark ? `rgba(255,255,255,${a * 0.4})` : `rgba(120,90,40,${a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = gr; x.fillRect(bx - br, by - br, br * 2, br * 2);
+  }
+  const id = x.getImageData(0, 0, w, h), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { const n = (r() - 0.5) * noise; d[i] += n; d[i + 1] += n; d[i + 2] += n * 0.9; }
+  x.putImageData(id, 0, 0);
+  x.lineCap = 'round';
+  for (let i = 0; i < fibers; i++) {
+    const fx = r() * w, fy = r() * h, a = r() * Math.PI * 2, l = 6 + r() * 26;
+    x.strokeStyle = dark ? `rgba(255,255,255,${0.02 + r() * 0.04})` : `rgba(90,70,40,${0.04 + r() * 0.08})`; x.lineWidth = 0.6 + r() * 0.8;
+    x.beginPath(); x.moveTo(fx, fy); x.quadraticCurveTo(fx + Math.cos(a + 0.6) * l * 0.5, fy + Math.sin(a + 0.6) * l * 0.5, fx + Math.cos(a) * l, fy + Math.sin(a) * l); x.stroke();
+  }
+  return c;
+}
+
+// Faux newspaper columns (period ad copy), drawn on transparent so it can be laid over any paper
+const WORDS = ('the and of a to in delicious refreshing pure tonic soda fountain atlanta drug store glass cents sold every druggist ' +
+  'invigorating relieves fatigue cool sparkling sold here bottled carbonated syrup nerve brain famous genuine accept no substitutes ' +
+  'imitations beware ask for it by name served cold ice parlor sundries patent new improved family wholesale retail orders filled').split(' ');
+function makeNews(w, h, seed, { masthead = null, date = '', cols = 4, alpha = 0.55, top = 0 } = {}) {
+  const c = mk(w, h), x = c.getContext('2d'), r = rng(seed);
+  x.fillStyle = P.ink; x.globalAlpha = alpha;
+  let y0 = 70 + top;
+  if (masthead) {
+    x.textAlign = 'center'; x.textBaseline = 'alphabetic';
+    x.font = `400 96px UnifrakturMaguntia`; x.fillText(masthead, w / 2, y0 + 80);
+    x.fillRect(50, y0 + 104, w - 100, 4); x.fillRect(50, y0 + 112, w - 100, 1.5);
+    x.font = `400 22px 'Old Standard TT'`; x.textAlign = 'left'; x.fillText('VOL. I', 56, y0 + 140);
+    x.textAlign = 'center'; x.fillText(date, w / 2, y0 + 140); x.textAlign = 'right'; x.fillText('PRICE FIVE CENTS', w - 56, y0 + 140);
+    x.fillRect(50, y0 + 152, w - 100, 1.5); y0 += 180;
+  }
+  const gut = 26, cw = (w - 100 - gut * (cols - 1)) / cols;
+  x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  for (let ci = 0; ci < cols; ci++) {
+    const cx = 50 + ci * (cw + gut); let y = y0 + r() * 20;
+    if (ci) { x.fillRect(cx - gut / 2, y0, 1, h - y0 - 40); }
+    while (y < h - 50) {
+      if (r() < 0.12) { // headline block
+        x.font = `700 ${26 + Math.floor(r() * 10)}px 'Old Standard TT'`;
+        const words = []; for (let k = 0; k < 2 + Math.floor(r() * 2); k++) words.push(WORDS[Math.floor(r() * WORDS.length)].toUpperCase());
+        y += 34; x.textAlign = 'center'; x.fillText(words.join(' ').slice(0, 22), cx + cw / 2, y); x.textAlign = 'left';
+        y += 10; x.fillRect(cx + cw * 0.3, y, cw * 0.4, 1); y += 14;
+      }
+      x.font = `400 15px 'Old Standard TT'`;
+      const n = 3 + Math.floor(r() * 9);
+      for (let li = 0; li < n && y < h - 50; li++) {
+        let s = ''; while (x.measureText(s).width < cw - 30) s += WORDS[Math.floor(r() * WORDS.length)] + ' ';
+        y += 19; x.fillText(li === n - 1 ? s.slice(0, Math.floor(s.length * (0.3 + r() * 0.5))) : s.trim(), cx, y);
+      }
+      y += 12;
+    }
+  }
+  return c;
+}
+
+// Grain frames (stop-motion flicker), soft
+const GRAIN = [];
+function makeGrain() {
+  for (let k = 0; k < 4; k++) {
+    const c = mk(540, 960), x = c.getContext('2d'), id = x.createImageData(540, 960), d = id.data, r = rng(900 + k);
+    for (let i = 0; i < d.length; i += 4) { const v = r() * 255; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255; }
+    x.putImageData(id, 0, 0);
+    // a couple of dust specks and hairs
+    for (let i = 0; i < 18; i++) { x.fillStyle = r() < 0.5 ? '#000' : '#fff'; x.beginPath(); x.arc(r() * 540, r() * 960, 0.6 + r() * 1.6, 0, 7); x.fill(); }
+    x.strokeStyle = 'rgba(0,0,0,0.9)'; x.lineWidth = 0.8;
+    if (k % 2) { x.beginPath(); const hx = r() * 540, hy = r() * 960; x.moveTo(hx, hy); x.bezierCurveTo(hx + 20, hy - 10, hx + 10, hy + 30, hx + 35, hy + 25); x.stroke(); }
+    GRAIN.push(c);
+  }
+}
+
+/* ------------------------------------------------------------------ cut paper primitives */
+// jagged polygon around a rectangle (torn on chosen sides)
+function tornRectPoly(w, h, seed, { torn = 'tblr', amp = 7, step = 14 } = {}) {
+  const r = rng(seed), pts = [];
+  const side = (x0, y0, x1, y1, isTorn) => {
+    const L = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.round(L / step)), nx = -(y1 - y0) / L, ny = (x1 - x0) / L;
+    for (let i = 0; i < n; i++) { const u = i / n, o = isTorn ? (r() - 0.5) * 2 * amp : (r() - 0.5) * 1.2; pts.push([x0 + (x1 - x0) * u + nx * o, y0 + (y1 - y0) * u + ny * o]); }
+  };
+  side(0, 0, w, 0, torn.includes('t')); side(w, 0, w, h, torn.includes('r')); side(w, h, 0, h, torn.includes('b')); side(0, h, 0, 0, torn.includes('l'));
+  return pts;
+}
+function polyPath(x, pts) { x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1])); x.closePath(); }
+
+// Generic cutout: draws content, dilates it into a white paper border, adds a soft drop shadow.
+function makeCut(w, h, draw, { border = 12, seed = 1, shadow = true, edge = P.white, pad = 40 } = {}) {
+  const PW = w + pad * 2, PH = h + pad * 2;
+  const c1 = mk(PW, PH), x1 = c1.getContext('2d'); x1.translate(pad, pad); draw(x1, w, h);
+  const c2 = mk(PW, PH), x2 = c2.getContext('2d'), r = rng(seed);
+  if (border > 0) {
+    for (let k = 0; k < 28; k++) { const a = k / 28 * Math.PI * 2, b = border * (0.86 + r() * 0.28); x2.drawImage(c1, Math.cos(a) * b, Math.sin(a) * b); }
+    x2.globalCompositeOperation = 'source-in'; x2.fillStyle = edge; x2.fillRect(0, 0, PW, PH);
+    x2.globalCompositeOperation = 'source-over';
+  }
+  x2.drawImage(c1, 0, 0);
+  const out = mk(PW, PH), xo = out.getContext('2d');
+  if (shadow) {
+    const s = mk(PW, PH), xs = s.getContext('2d');
+    xs.filter = 'blur(7px)'; xs.drawImage(c2, 0, 0); xs.filter = 'none';
+    xs.globalCompositeOperation = 'source-in'; xs.fillStyle = 'rgba(20,12,4,0.42)'; xs.fillRect(0, 0, PW, PH);
+    xo.drawImage(s, 5, 10);
+  }
+  xo.drawImage(c2, 0, 0);
+  return { c: out, w: PW, h: PH, pad };
+}
+// place a cutout centred at x,y (with stop-motion boil)
+function place(cut, x, y, { rot = 0, scale = 1, alpha = 1, key = 0, boil = 1.2, sx = 1, sy = 1 } = {}) {
+  if (alpha <= 0.001 || scale <= 0.001) return;
+  const [jx, jy, jr] = jit(key, boil);
+  g.save(); g.globalAlpha *= alpha; g.translate(x + jx, y + jy); g.rotate(rot + jr * 0.004 * boil); g.scale(scale * sx, scale * sy);
+  g.drawImage(cut.c, -cut.w / 2, -cut.h / 2); g.restore();
+}
+
+// torn paper strip / panel (cached)
+function strip(w, h, color, seed, opts = {}) {
+  return cached(`strip:${w}:${h}:${color}:${seed}:${opts.torn || 'tblr'}`, () => {
+    const pts = tornRectPoly(w, h, seed, opts);
+    const tex = opts.tex ? cached(`tex:${color}`, () => makePaper(400, 400, color, 77, { noise: 18, fibers: 120, blotch: 2 })) : null;
+    return makeCut(w, h, (x) => {
+      polyPath(x, pts); x.fillStyle = color; x.fill();
+      if (tex) { x.save(); polyPath(x, pts); x.clip(); x.globalAlpha = 0.9; for (let yy = 0; yy < h; yy += 400) for (let xx = 0; xx < w; xx += 400) x.drawImage(tex, xx, yy); x.restore(); }
+      if (opts.draw) opts.draw(x, w, h);
+    }, { border: 0, seed, shadow: opts.shadow !== false });
+  });
+}
+// masking tape
+function tape(x, y, w, rot, key) {
+  const c = cached(`tape:${Math.round(w)}:${key}`, () => {
+    const h = 44, pts = tornRectPoly(w, h, key + 5, { torn: 'lr', amp: 5, step: 7 });
+    const cc = mk(w + 20, h + 20), xx = cc.getContext('2d'); xx.translate(10, 10);
+    polyPath(xx, pts); xx.fillStyle = P.tape; xx.fill();
+    xx.globalAlpha = 0.15; xx.strokeStyle = '#9b8f63'; for (let i = 0; i < w; i += 5) { xx.beginPath(); xx.moveTo(i, 2); xx.lineTo(i + 3, h - 2); xx.stroke(); }
+    return cc;
+  });
+  const [jx, jy] = jit(key, 0.8);
+  g.save(); g.translate(x + jx, y + jy); g.rotate(rot); g.drawImage(c, -c.width / 2, -c.height / 2); g.restore();
+}
+
+/* ------------------------------------------------------------------ halftone */
+// dots on a 45° grid; darkFn(x, y) returns 0..1 darkness (or <0 to skip)
+function halftone(x, bx, by, bw, bh, sp, darkFn, color, ang = Math.PI / 4, maxR = 0.66) {
+  const ca = Math.cos(ang), sa = Math.sin(ang), cx = bx + bw / 2, cy = by + bh / 2, R = Math.hypot(bw, bh) / 2 + sp;
+  const n = Math.ceil(R / sp);
+  x.beginPath();
+  for (let i = -n; i <= n; i++) for (let j = -n; j <= n; j++) {
+    const px = cx + (i * ca - j * sa) * sp, py = cy + (i * sa + j * ca) * sp;
+    if (px < bx - sp || px > bx + bw + sp || py < by - sp || py > by + bh + sp) continue;
+    const d = darkFn(px, py); if (d <= 0) continue;
+    const rr = sp * maxR * Math.sqrt(Math.min(1.2, d)); if (rr < 0.45) continue;
+    x.moveTo(px + rr, py); x.arc(px, py, rr, 0, Math.PI * 2);
+  }
+  x.fillStyle = color; x.fill();
+}
+// red halftone burst disc (behind heroes)
+function burst(r, color, seed) {
+  return cached(`burst:${r}:${color}:${seed}`, () => {
+    const c = mk(r * 2, r * 2), x = c.getContext('2d');
+    halftone(x, 0, 0, r * 2, r * 2, 15, (px, py) => { const d = Math.hypot(px - r, py - r) / r; return d > 1 ? -1 : Math.pow(1 - d, 0.8) * 1.1; }, color, 0.3, 0.7);
+    return c;
+  });
+}
+
+/* ------------------------------------------------------------------ vessels (bottles, glass, pod) */
+const NS = 240;
+function profile(pts, smoothPasses = 4) {
+  const R = new Float32Array(NS + 1);
+  for (let i = 0; i <= NS; i++) {
+    const y = i / NS; let k = 0; while (k < pts.length - 2 && pts[k + 1][0] < y) k++;
+    const [y0, r0] = pts[k], [y1, r1] = pts[k + 1]; R[i] = lerp(r0, r1, clamp((y - y0) / (y1 - y0 || 1)));
+  }
+  for (let p = 0; p < smoothPasses; p++) { const T = R.slice(); for (let i = 1; i < NS; i++) R[i] = (T[i - 1] + 2 * T[i] + T[i + 1]) / 4; }
+  return R;
+}
+const PROF = {
+  contour: profile([[0, .31], [.012, .345], [.032, .345], [.045, .30], [.10, .285], [.17, .30], [.24, .40], [.30, .62], [.35, .80], [.42, .855], [.49, .80], [.555, .72], [.62, .86], [.70, .985], [.78, .93], [.86, .80], [.93, .80], [.975, .83], [.995, .80], [1, .74]]),
+  proto: profile([[0, .26], [.012, .29], [.032, .29], [.045, .25], [.10, .24], [.17, .26], [.24, .36], [.31, .64], [.37, .80], [.45, .86], [.52, .82], [.58, .86], [.66, 1.0], [.76, .97], [.86, .74], [.93, .60], [.975, .60], [.995, .58], [1, .54]]),
+  pet: profile([[0, .34], [.04, .34], [.045, .40], [.06, .40], [.065, .31], [.13, .30], [.21, .36], [.29, .62], [.35, .80], [.42, .84], [.49, .79], [.55, .72], [.62, .85], [.70, .97], [.78, .92], [.86, .80], [.94, .82], [.985, .84], [1, .72]]),
+  straight: profile([[0, .30], [.012, .34], [.032, .34], [.045, .29], [.12, .28], [.20, .30], [.27, .48], [.33, .80], [.38, .94], [.44, 1.0], [.97, 1.0], [.995, .97], [1, .92]], 3),
+  hutch: profile([[0, .40], [.02, .46], [.06, .46], [.08, .38], [.15, .36], [.22, .42], [.28, .74], [.33, .94], [.38, 1.0], [.97, 1.0], [.995, .96], [1, .92]], 3),
+  glass: profile([[0, 1.0], [.04, .97], [.30, .80], [.55, .55], [.66, .34], [.72, .20], [.84, .17], [.90, .30], [.96, .56], [1, .58]], 3),
+  pod: profile([[0, .04], [.04, .14], [.12, .42], [.25, .74], [.42, .96], [.55, 1.0], [.68, .92], [.82, .66], [.93, .34], [.985, .10], [1, .02]], 3),
+};
+function mixProf(A, B, u) { const R = new Float32Array(NS + 1); for (let i = 0; i <= NS; i++) R[i] = lerp(A[i], B[i], u); return R; }
+function vPath(x, R, cx, top, h, w, pad = 0) {
+  x.beginPath();
+  for (let i = 0; i <= NS; i++) x.lineTo(cx + R[i] * w / 2 + pad, top + i / NS * h);
+  x.lineTo(cx + R[NS] * w / 2 + pad * 0.7, top + h + pad);
+  x.lineTo(cx - R[NS] * w / 2 - pad * 0.7, top + h + pad);
+  for (let i = NS; i >= 0; i--) x.lineTo(cx - R[i] * w / 2 - pad, top + i / NS * h);
+  x.closePath();
+}
+function hexMix(a, b, u) { const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16); const ch = s => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, u)); return `rgb(${ch(16)},${ch(8)},${ch(0)})`; }
+const GLASS = {
+  green: { base: P.green, dot: P.greenDot, liq: P.cola, liqDot: P.colaDot },
+  amber: { base: P.amber, dot: P.amberDot, liq: '#6A3E1D', liqDot: '#1E0F06' },
+  aqua: { base: P.aqua, dot: P.aquaDot, liq: '#5B4A35', liqDot: '#17110B' },
+  clear: { base: P.clear, dot: P.clearDot, liq: '#5A3A26', liqDot: '#170D07' },
+  pod: { base: P.pod, dot: P.podDot, liq: P.pod, liqDot: P.podDot },
+};
+// draw a vessel into ctx x. o: {R, h, w, glass, liquid, flutes:[[y0,y1]], nFl, cap, capCol, border, label}
+function drawVessel(x, o, cx, top) {
+  const { R, h, w } = o, gl = o.colors || GLASS[o.glass || 'green'], sp = o.dot || 8;
+  const rAt = y => R[clamp(Math.round((y - top) / h * NS), 0, NS)] * w / 2;
+  // white paper border + cap border first
+  if (o.border) {
+    x.save(); x.shadowColor = 'rgba(20,12,4,0.40)'; x.shadowBlur = 16; x.shadowOffsetX = 6; x.shadowOffsetY = 11;
+    vPath(x, R, cx, top, h, w, o.border); x.fillStyle = P.white; x.fill();
+    if (o.cap) { const cw = R[0] * w * 1.14 + o.border * 2, ch = h * (o.cap === 'screw' ? 0.075 : 0.05) + o.border; x.fillRect(cx - cw / 2, top - ch, cw, ch + 4); }
+    x.restore();
+  }
+  x.save(); vPath(x, R, cx, top, h, w); x.clip();
+  const liqY = top + (o.liquid ?? 1.2) * h;
+  x.fillStyle = gl.base; x.fillRect(cx - w / 2 - 2, top - 2, w + 4, h + 4);
+  x.fillStyle = gl.liq; x.fillRect(cx - w / 2 - 2, liqY, w + 4, top + h - liqY + 2);
+  const dark = (inLiq) => (px, py) => {
+    if ((py >= liqY) !== inLiq) return -1;
+    const r = rAt(py); if (r < 1) return -1; const u = (px - cx) / r; if (Math.abs(u) > 1.02) return -1;
+    const uu = clamp(u, -1, 1), lam = Math.max(0, -0.42 * uu + 0.9 * Math.sqrt(1 - uu * uu)), shade = 1 - lam, edge = smooth(0.72, 1, Math.abs(uu));
+    return inLiq ? 0.30 + 0.55 * shade + 0.3 * edge : 0.05 + 0.5 * shade + 0.4 * edge;
+  };
+  halftone(x, cx - w / 2, top, w, h, sp, dark(false), gl.dot);
+  if (o.liquid !== undefined) halftone(x, cx - w / 2, top, w, h, sp, dark(true), gl.liqDot);
+  // flutes / ribs
+  if (o.flutes) {
+    const n = o.nFl || 11;
+    for (const [y0, y1] of o.flutes) for (let k = 0; k < n; k++) {
+      const th = -1.32 + 2.64 * k / (n - 1), u = Math.sin(th), vis = Math.cos(th);
+      for (const [off, col, lw] of [[-2.2, `rgba(255,255,255,${0.42 * vis})`, 2.6], [2.0, `rgba(0,0,0,${0.36 * vis})`, 2.2]]) {
+        x.beginPath(); x.lineWidth = lw * (o.ribW || 1); x.strokeStyle = col; x.lineCap = 'round';
+        for (let i = Math.ceil(y0 * NS); i <= y1 * NS; i++) { const yy = top + i / NS * h; x.lineTo(cx + u * R[i] * w / 2 + off * (o.ribW || 1), yy); }
+        x.stroke();
+      }
+    }
+  }
+  if (o.label === 'band') { // wrap-around plastic label
+    const y0 = top + 0.455 * h, y1 = top + 0.565 * h;
+    const gr = x.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
+    gr.addColorStop(0, P.red2); gr.addColorStop(0.3, '#E0333D'); gr.addColorStop(0.75, P.red); gr.addColorStop(1, '#6E0E16');
+    x.fillStyle = gr; x.fillRect(cx - w / 2, y0, w, y1 - y0);
+    x.fillStyle = P.white; x.font = `700 ${Math.round(h * 0.034)}px Oswald`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText('20 FL OZ', cx, (y0 + y1) / 2 + 2);
+    x.fillRect(cx - w * 0.32, y0 + 8, w * 0.64, 2.5); x.fillRect(cx - w * 0.32, y1 - 10, w * 0.64, 2.5);
+  }
+  // painted highlight swipes
+  if (o.hi !== false) {
+    const r = rng(o.seed || 3);
+    for (const [uc, wd, al] of [[-0.6, 0.11, 0.85], [-0.36, 0.035, 0.5], [0.8, 0.04, 0.3]]) {
+      x.beginPath(); const L = [], Rr = [];
+      for (let i = Math.round(NS * (o.hiFrom ?? 0.08)); i <= NS * 0.97; i += 4) {
+        const yy = top + i / NS * h, rr = R[i] * w / 2, jj = (r() - 0.5) * 2.2;
+        L.push([cx + (uc - wd) * rr + jj, yy]); Rr.push([cx + (uc + wd) * rr + jj, yy]);
+      }
+      [...L, ...Rr.reverse()].forEach((p, i) => i ? x.lineTo(p[0], p[1]) : x.moveTo(p[0], p[1]));
+      x.closePath(); x.fillStyle = `rgba(255,255,250,${al})`; x.fill();
+    }
+  }
+  x.restore();
+  // outline
+  x.save(); vPath(x, R, cx, top, h, w); x.lineWidth = 3; x.strokeStyle = P.ink; x.lineJoin = 'round'; x.stroke(); x.restore();
+  // caps
+  const mouth = R[0] * w;
+  if (o.cap === 'crown') {
+    const cw = mouth * 1.14, ch = h * 0.05, y = top - ch * 0.75;
+    x.save(); x.beginPath(); x.moveTo(cx - cw / 2, y);
+    x.lineTo(cx + cw / 2, y); const teeth = 9;
+    for (let i = 0; i <= teeth * 2; i++) x.lineTo(cx + cw / 2 - i * cw / (teeth * 2), y + ch + (i % 2 ? 4 : -2));
+    x.closePath(); x.fillStyle = o.capCol || P.red; x.fill(); x.clip();
+    halftone(x, cx - cw / 2, y, cw, ch + 6, 6, (px) => 0.2 + 0.6 * Math.abs((px - cx) / cw * 2), 'rgba(0,0,0,0.6)');
+    x.restore(); x.lineWidth = 2.5; x.strokeStyle = P.ink; x.stroke();
+  }
+  if (o.cap === 'screw') {
+    const cw = mouth * 1.12, ch = h * 0.07, y = top - ch * 0.8;
+    x.fillStyle = o.capCol || P.red; x.fillRect(cx - cw / 2, y, cw, ch);
+    x.strokeStyle = 'rgba(0,0,0,0.35)'; x.lineWidth = 2; for (let i = 1; i < 12; i++) { const xx = cx - cw / 2 + i * cw / 12; x.beginPath(); x.moveTo(xx, y + 4); x.lineTo(xx, y + ch - 4); x.stroke(); }
+    x.fillStyle = 'rgba(255,255,255,0.35)'; x.fillRect(cx - cw * 0.36, y + 3, cw * 0.1, ch - 6);
+    x.lineWidth = 2.5; x.strokeStyle = P.ink; x.strokeRect(cx - cw / 2, y, cw, ch);
+  }
+  if (o.cap === 'hutch') {
+    x.lineWidth = 4; x.strokeStyle = P.ink; x.beginPath(); x.ellipse(cx, top - h * 0.02, mouth * 0.42, h * 0.07, 0, Math.PI * 1.02, Math.PI * 1.98); x.stroke();
+    x.fillStyle = '#7A5A44'; x.fillRect(cx - mouth * 0.3, top + h * 0.005, mouth * 0.6, h * 0.025);
+  }
+  if (o.cap === 'stem') {
+    x.lineWidth = w * 0.06; x.strokeStyle = '#5C3A1C'; x.lineCap = 'round'; x.beginPath(); x.moveTo(cx, top + h * 0.02); x.quadraticCurveTo(cx + w * 0.02, top - h * 0.05, cx + w * 0.09, top - h * 0.08); x.stroke();
+  }
+  if (o.after) o.after(x, cx, top);
+}
+// cached vessel cutout (centred canvas)
+function vessel(key, o) {
+  return cached('v:' + key, () => {
+    const b = o.border ?? 13, ex = o.cap ? o.h * 0.09 : 0;
+    return makeCut(o.w + b * 2 + 10, o.h + ex + b * 2 + 10, (x, cw) => drawVessel(x, { ...o, border: 0 }, cw / 2, ex + b + 5), { border: b, seed: key.length * 13 + 7 });
+  });
+}
+// screen y of a cached vessel's top edge when placed centred at cy
+function vesselTop(o, cy) { const b = o.border ?? 13, ex = o.cap ? o.h * 0.09 : 0, PH = o.h + ex + b * 2 + 10 + 80; return cy - PH / 2 + 40 + ex + b + 5; }
+// live vessel straight onto the stage (used for morphs)
+function vesselLive(o, cx, cy, rot = 0, key = 0) {
+  const [jx, jy, jr] = jit(key, 1.1);
+  g.save(); g.translate(cx + jx, cy + jy); g.rotate(rot + jr * 0.004);
+  drawVessel(g, { border: 13, ...o }, 0, -o.h / 2); g.restore();
+}
+
+/* ------------------------------------------------------------------ type */
+const RFONTS = [["Anton", 400, ''], ["Playfair Display", 900, ''], ["Abril Fatface", 400, ''], ["Oswald", 700, ''], ["Old Standard TT", 700, ''],
+  ["Special Elite", 400, ''], ["Courier Prime", 700, ''], ["Playfair Display", 900, 'italic ']];
+const RSTY = [[P.white, P.ink], [P.ink, P.white], [P.red, P.white], [P.news, P.ink], [P.kraft, P.ink], ['#E9D7A2', P.red], [P.white, P.red]];
+// ransom-note headline, laid out once per text
+function ransom(text, size, seed, { maxW = 960, lh = 1.18 } = {}) {
+  return cached(`ransom:${text}:${size}:${seed}`, () => {
+    const r = rng(seed), lines = text.split('\n'), out = []; let idx = 0, maxLw = 0;
+    lines.forEach((ln, li) => {
+      const row = []; let x = 0;
+      for (const ch of ln) {
+        if (ch === ' ') { x += size * 0.3; continue; }
+        const f = RFONTS[Math.floor(r() * RFONTS.length)], st = RSTY[Math.floor(r() * RSTY.length)], sz = size * (0.82 + r() * 0.34);
+        g.font = `${f[2]}${f[1]} ${sz}px '${f[0]}'`; const tw = g.measureText(ch).width;
+        const bw = tw + sz * 0.26, bh = sz * 1.12;
+        const corners = [0, 1, 2, 3].map(() => [(r() - 0.5) * sz * 0.1, (r() - 0.5) * sz * 0.1]);
+        row.push({ ch, font: `${f[2]}${f[1]} ${sz}px '${f[0]}'`, bg: st[0], fg: st[1], x: x + bw / 2, bw, bh, rot: (r() - 0.5) * 0.2, dy: (r() - 0.5) * size * 0.14, corners, i: idx++, key: Math.floor(r() * 1e6) });
+        x += bw + size * 0.04;
+      }
+      maxLw = Math.max(maxLw, x);
+      out.push({ row, w: x, y: li * size * lh });
+    });
+    const sc = Math.min(1, maxW / maxLw);
+    return { lines: out, n: idx, size, scale: sc, h: lines.length * size * lh };
+  });
+}
+function drawRansom(L, cx, cy, t, t0, { stagger = 0.045, alpha = 1, out = null } = {}) {
+  if (t < t0) return;
+  g.save(); g.translate(cx, cy - (L.h - L.size * 1.18) / 2 * L.scale); g.scale(L.scale, L.scale);
+  for (const ln of L.lines) for (const c of ln.row) {
+    const ts = t0 + c.i * stagger; if (t < ts) continue;
+    let u = clamp((t - ts) / 0.2), a = alpha * clamp((t - ts) / 0.06);
+    if (out !== null && t > out) { const v = ramp(t, out + c.i * 0.015, out + c.i * 0.015 + 0.18); a *= 1 - v; u = 1 + v * 0.4; }
+    if (a <= 0) continue;
+    const s = u <= 1 ? lerp(1.7, 1, eback(u)) : u, [jx, jy, jr] = jit(c.key, 1.0);
+    g.save(); g.globalAlpha *= a; g.translate(c.x - ln.w / 2 + jx, ln.y + c.dy + jy); g.rotate(c.rot + jr * 0.01); g.scale(s, s);
+    const hw = c.bw / 2, hh = c.bh / 2, k = c.corners;
+    g.fillStyle = 'rgba(25,15,5,0.30)';
+    g.beginPath(); g.moveTo(-hw + k[0][0] + 4, -hh + k[0][1] + 6); g.lineTo(hw + k[1][0] + 4, -hh + k[1][1] + 6); g.lineTo(hw + k[2][0] + 4, hh + k[2][1] + 6); g.lineTo(-hw + k[3][0] + 4, hh + k[3][1] + 6); g.fill();
+    g.fillStyle = c.bg;
+    g.beginPath(); g.moveTo(-hw + k[0][0], -hh + k[0][1]); g.lineTo(hw + k[1][0], -hh + k[1][1]); g.lineTo(hw + k[2][0], hh + k[2][1]); g.lineTo(-hw + k[3][0], hh + k[3][1]); g.fill();
+    g.fillStyle = c.fg; g.font = c.font; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(c.ch, 0, c.bh * 0.04);
+    g.restore();
+  }
+  g.restore();
+}
+
+// rubber stamp (cached), slams in
+function stampCanvas(text, sub, color, size) {
+  return cached(`stamp:${text}:${sub}:${color}:${size}`, () => {
+    g.font = `400 ${size}px Anton`; const tw = g.measureText(text).width;
+    const w = tw + size * 0.9, h = size * (sub ? 1.95 : 1.45), c = mk(w + 20, h + 20), x = c.getContext('2d'), r = rng(text.length * 31 + size);
+    x.translate(10, 10); x.strokeStyle = color; x.fillStyle = color;
+    x.lineWidth = size * 0.07; x.strokeRect(4, 4, w - 8, h - 8); x.lineWidth = size * 0.025; x.strokeRect(size * 0.14, size * 0.14, w - size * 0.28, h - size * 0.28);
+    x.font = `400 ${size}px Anton`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, w / 2, sub ? h * 0.40 : h / 2 + size * 0.03);
+    if (sub) { x.font = `700 ${size * 0.32}px 'Courier Prime'`; x.fillText(sub, w / 2, h * 0.76); }
+    // ink wear
+    x.globalCompositeOperation = 'destination-out';
+    for (let i = 0; i < w * h / 90; i++) { x.globalAlpha = 0.3 + r() * 0.7; x.beginPath(); x.arc(r() * w, r() * h, 0.5 + r() * 2.2 * (r() < 0.1 ? 3 : 1), 0, 7); x.fill(); }
+    x.globalAlpha = 0.5; for (let i = 0; i < 5; i++) { x.fillRect(r() * w, r() * h, 20 + r() * 120, 1 + r() * 3); }
+    return c;
+  });
+}
+function drawStamp(text, x, y, rot, t, t0, { color = P.red, size = 74, sub = '', alpha = 0.92, out = 1e9 } = {}) {
+  if (t < t0) return;
+  const c = stampCanvas(text, sub, color, size), u = clamp((t - t0) / 0.13), s = lerp(2.1, 1, ein(u));
+  const a = alpha * clamp((t - t0) / 0.05) * (1 - ramp(t, out, out + 0.25));
+  if (a <= 0) return;
+  const [jx, jy] = jit(text.length + 50, 0.7), shake = u < 1 ? 0 : Math.exp(-(t - t0 - 0.13) * 30) * 8;
+  g.save(); g.globalAlpha *= a; g.globalCompositeOperation = 'multiply';
+  g.translate(x + jx + shake, y + jy); g.rotate(rot); g.scale(s, s); g.drawImage(c, -c.width / 2, -c.height / 2); g.restore();
+}
+
+// marker stroke that draws on (with arrow head option)
+function marker(pts, prog, { color = P.red, w = 9, key = 1, head = false, alpha = 0.95 } = {}) {
+  if (prog <= 0) return;
+  const n = pts.length, m = Math.max(2, Math.ceil(n * clamp(prog)));
+  g.save(); g.globalAlpha *= alpha; g.strokeStyle = color; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
+  const [jx, jy] = jit(key, 1.2);
+  g.beginPath(); for (let i = 0; i < m; i++) g.lineTo(pts[i][0] + jx, pts[i][1] + jy); g.stroke();
+  if (head && prog >= 0.98) {
+    const a = pts[n - 1], b = pts[n - 4] || pts[0], ang = Math.atan2(a[1] - b[1], a[0] - b[0]), L = w * 3.4;
+    g.beginPath(); g.moveTo(a[0] + jx - Math.cos(ang - 0.5) * L, a[1] + jy - Math.sin(ang - 0.5) * L); g.lineTo(a[0] + jx, a[1] + jy); g.lineTo(a[0] + jx - Math.cos(ang + 0.5) * L, a[1] + jy - Math.sin(ang + 0.5) * L); g.stroke();
+  }
+  g.restore();
+}
+const curve = (x0, y0, x1, y1, bend = 0.2, n = 30) => { const mx = (x0 + x1) / 2 - (y1 - y0) * bend, my = (y0 + y1) / 2 + (x1 - x0) * bend; const o = []; for (let i = 0; i <= n; i++) { const u = i / n; o.push([(1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, (1 - u) * (1 - u) * y0 + 2 * u * (1 - u) * my + u * u * y1]); } return o; };
+const loop = (cx, cy, rx, ry, seed = 1, turns = 1.12) => { const r = rng(seed), o = [], a0 = -2.2; for (let i = 0; i <= 60; i++) { const a = a0 + i / 60 * Math.PI * 2 * turns, k = 1 + (r() - 0.5) * 0.05 + i * 0.0015; o.push([cx + Math.cos(a) * rx * k, cy + Math.sin(a) * ry * k]); } return o; };
+function markerText(s, x, y, size, prog, { color = P.red, rot = -0.04, align = 'center', key = 9 } = {}) {
+  if (prog <= 0) return;
+  g.save(); const [jx, jy] = jit(key, 0.9); g.translate(x + jx, y + jy); g.rotate(rot);
+  g.font = `400 ${size}px 'Permanent Marker'`; g.textAlign = align; g.textBaseline = 'middle';
+  const tw = g.measureText(s).width, x0 = align === 'center' ? -tw / 2 : align === 'right' ? -tw : 0;
+  g.beginPath(); g.rect(x0 - 10, -size, (tw + 20) * clamp(prog), size * 2); g.clip();
+  g.fillStyle = color; g.fillText(s, 0, 0); g.restore();
+}
+// typewriter text on a strip; returns nothing. chars = visible count
+function typed(lines, x, y, size, chars, { color = P.ink, font = 'Special Elite', lh = 1.32, align = 'left', caret = true } = {}) {
+  g.save(); g.font = `400 ${size}px '${font}'`; g.fillStyle = color; g.textBaseline = 'alphabetic'; g.textAlign = align;
+  let left = chars, cy = y, lastX = x, lastY = y;
+  for (const ln of lines) {
+    if (left <= 0) break; const s = ln.slice(0, Math.max(0, left)); left -= ln.length;
+    g.fillText(s, x, cy); lastX = x + (align === 'left' ? g.measureText(s).width : 0); lastY = cy; cy += size * lh;
+  }
+  if (caret && Math.floor(TICK / 3) % 2 === 0) g.fillRect(lastX + 3, lastY - size * 0.8, size * 0.5, size * 0.95);
+  g.restore();
+}
+// small typed label on a torn strip (kicker / tags)
+function kicker(text, x, y, t, t0, { size = 34, bg = P.white, fg = P.ink, rot = -0.015, key = 0, font = 'Special Elite', out = 1e9 } = {}) {
+  if (t < t0) return;
+  g.font = `400 ${size}px '${font}'`; const tw = g.measureText(text).width;
+  const s = strip(Math.round(tw + size * 1.2), Math.round(size * 1.6), bg, 400 + key, { torn: 'lr', amp: 5, step: 9 });
+  const u = eout(ramp(t, t0, t0 + 0.25)), a = u * (1 - ramp(t, out, out + 0.2));
+  if (a <= 0) return;
+  place(s, x + (1 - u) * 60, y, { rot, alpha: a, key: 600 + key, boil: 0.8 });
+  const [jx, jy] = jit(600 + key, 0.8);
+  g.save(); g.globalAlpha *= a; g.translate(x + (1 - u) * 60 + jx, y + jy); g.rotate(rot);
+  g.font = `400 ${size}px '${font}'`; g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 0, size * 0.06); g.restore();
+}
+
+/* ------------------------------------------------------------------ captions (spoken words, typed strips) */
+const SAY = [[/eighteen eighty-six/g, '1886'], [/nineteen fifteen/g, '1915'], [/nineteen fifty-seven/g, '1957'], [/nineteen sixty/g, '1960'], [/hobble skirt/g, 'hobble skirt']];
+const CHUNKS = [];
+for (const id of CUES.order) {
+  const L = C[id]; let text = L.text; for (const [a, b] of SAY) text = text.replace(a, b);
+  const parts = text.split(/(?<=[,.?!])\s+/).flatMap(p => {
+    const w = p.split(' '); if (p.length <= 30) return [p];
+    const out = []; let cur = '';
+    for (const x of w) { if ((cur + ' ' + x).trim().length > 26 && cur) { out.push(cur.trim()); cur = x; } else cur += ' ' + x; }
+    if (cur.trim()) out.push(cur.trim());
+    // merge a dangling short tail
+    if (out.length > 1 && out[out.length - 1].length < 9) { const t = out.pop(); out[out.length - 1] += ' ' + t; }
+    return out;
+  });
+  const total = parts.reduce((s, p) => s + p.length + 4, 0); let acc = 0;
+  parts.forEach((p, i) => { const t0 = L.at + L.dur * acc / total; acc += p.length + 4; const t1 = i === parts.length - 1 ? L.end + 0.25 : L.at + L.dur * acc / total; CHUNKS.push({ t0, t1, text: p, i: CHUNKS.length }); });
+}
+for (let i = 0; i < CHUNKS.length - 1; i++) CHUNKS[i].t1 = Math.min(CHUNKS[i].t1, CHUNKS[i + 1].t0);
+function drawCaption(t) {
+  const c = CHUNKS.find(c => t >= c.t0 - 0.02 && t < c.t1); if (!c) return;
+  const size = 50; g.font = `400 ${size}px 'Special Elite'`; const tw = g.measureText(c.text).width;
+  const s = strip(Math.round(tw + 70), 86, P.white, 7000 + c.i, { torn: 'lr', amp: 6, step: 10 });
+  const u = eout(ramp(t, c.t0, c.t0 + 0.14)), rot = ((c.i * 37) % 5 - 2) * 0.006, y = 1548;
+  place(s, 540, y + (1 - u) * 18, { rot, alpha: u, key: 7000 + c.i, boil: 0.6 });
+  const [jx, jy] = jit(7000 + c.i, 0.6);
+  g.save(); g.globalAlpha *= u; g.translate(540 + jx, y + (1 - u) * 18 + jy); g.rotate(rot);
+  g.font = `400 ${size}px 'Special Elite'`; g.fillStyle = P.ink; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(c.text, 0, 4);
+  // highlight the key word in red ink underline
+  g.restore();
+}
+
+/* ------------------------------------------------------------------ scene timing */
+const T = {
+  s1: at('fountain') - 0.3, s2: at('straight') - 0.3, s3: at('brief') - 0.35, s4: at('root') - 0.3,
+  s5: at('fix') - 0.3, s6: at('later') - 0.3, s7: at('payoff') - 0.35,
+};
+const BOUNDS = [0, T.s1, T.s2, T.s3, T.s4, T.s5, T.s6, T.s7, TOTAL + 1];
+const TR_IN = 0.28, TR_OUT = 0.32; // transition window around each boundary
+
+// key beats (spoken words)
+const B = {
+  crowd: wordAt('hook', 'pick'), point: wordAt('hook', 'that was'),
+  y1886: wordAt('fountain', 'eighteen'), fountain: wordAt('fountain', 'soda'), cents: wordAt('fountain', 'five'), nobottle: wordAt('fountain', 'no bottle'),
+  plain: wordAt('straight', 'plain'), label: wordAt('straight', 'paper label'),
+  ice: wordAt('copycats', 'slid'), copy: wordAt('copycats', 'copycats'), koka: wordAt('copycats', 'koka'), same: wordAt('copycats', 'exact'),
+  y1915: wordAt('brief', 'nineteen'), asked: wordAt('brief', 'asked'), feel: wordAt('brief', 'feel'), dark: wordAt('brief', 'dark'), broken: wordAt('brief', 'broken'),
+  root: wordAt('root', 'root'), indiana: wordAt('root', 'indiana'), dean: wordAt('root', 'earl'), coca: wordAt('root', 'coca'), ency: wordAt('root', 'encyclopedia'),
+  cocoa: wordAt('pod', 'cocoa'), wrong: wordAt('pod', 'wrong'), perfect: wordAt('pod', 'perfect'), ribs: wordAt('pod', 'ribs'), belly: wordAt('pod', 'belly'), became: wordAt('pod', 'became'), contour: wordAt('pod', 'contour'),
+  wobble: wordAt('fix', 'wobbled'), belt: wordAt('fix', 'conveyor'), slim: wordAt('fix', 'slimmed'), people: wordAt('fix', 'people'), hobble: wordAt('fix', 'hobble'),
+  painted: wordAt('later', 'painted'), y1957: wordAt('later', 'fifty'), y1960: wordAt('later', 'in nineteen sixty'), trademarked: wordAt('later', 'trademarked'),
+  plastic: wordAt('plastic', 'plastic'), curves: wordAt('plastic', 'curves'),
+  deco: wordAt('payoff', 'decoration'), hundred: wordAt('payoff', 'hundred'), anti: wordAt('payoff', 'anti'), feelit: wordAt('payoff', 'you can feel'),
+};
+
+/* ------------------------------------------------------------------ vessel definitions */
+const VH = 820; // hero bottle height
+const V = {
+  contour: (h = VH, extra = {}) => ({ R: PROF.contour, h, w: h * 0.30, glass: 'green', liquid: 0.235, flutes: [[0.555, 0.965], [0.20, 0.335]], nFl: 11, cap: 'crown', capCol: '#B9B2A2', seed: 5, ...extra }),
+  proto: (h = VH, extra = {}) => ({ R: PROF.proto, h, w: h * 0.42, glass: 'green', liquid: 0.235, flutes: [[0.56, 0.95], [0.20, 0.33]], nFl: 11, cap: 'crown', capCol: '#B9B2A2', seed: 6, ...extra }),
+  straight: (h = VH, extra = {}) => ({ R: PROF.straight, h, w: h * 0.29, glass: 'amber', liquid: 0.22, cap: 'crown', capCol: '#A9A497', seed: 7, ...extra }),
+  hutch: (h = VH, extra = {}) => ({ R: PROF.hutch, h: h * 0.86, w: h * 0.86 * 0.33, glass: 'aqua', liquid: 0.3, cap: 'hutch', seed: 8, ...extra }),
+  pet: (h = VH, extra = {}) => ({ R: PROF.pet, h: h * 1.08, w: h * 1.08 * 0.30, glass: 'clear', liquid: 0.22, flutes: [[0.58, 0.95]], nFl: 11, cap: 'screw', label: 'band', seed: 9, ...extra }),
+  glass: (h = VH, extra = {}) => ({ R: PROF.glass, h: h * 0.62, w: h * 0.62 * 0.62, glass: 'clear', liquid: 0.11, cap: null, seed: 10, hiFrom: 0.02, ...extra }),
+  pod: (h = VH, extra = {}) => ({ R: PROF.pod, h, w: h * 0.48, glass: 'pod', flutes: [[0.06, 0.95]], nFl: 11, ribW: 1.8, cap: 'stem', seed: 11, hiFrom: 0.1, ...extra }),
+};
+
+/* ------------------------------------------------------------------ assets that need fonts (built in init) */
+let PAPER, PAPER_DARK, NEWS_A, NEWS_B, NEWS_C, SHARDS;
+function init() {
+  PAPER = makePaper(W, H, P.paper, 11, { noise: 16, fibers: 900, blotch: 14 });
+  PAPER_DARK = makePaper(W, H, '#191714', 12, { noise: 10, fibers: 300, blotch: 6, dark: true });
+  NEWS_A = makeNews(W, H, 21, { masthead: 'The Atlanta Gazette', date: 'SATURDAY, MAY 8, 1886', alpha: 0.42 });
+  NEWS_B = makeNews(W, H, 22, { cols: 3, alpha: 0.30 });
+  NEWS_C = makeNews(W, H, 23, { cols: 4, alpha: 0.26 });
+  makeGrain();
+  // shards of the hero bottle for "broken on the ground"
+  const hb = vessel('contour-hero', V.contour());
+  const r = rng(77), cols = 4, rows = 8, pts = [];
+  for (let j = 0; j <= rows; j++) for (let i = 0; i <= cols; i++) {
+    const edge = i === 0 || j === 0 || i === cols || j === rows;
+    pts.push([i / cols * hb.w + (edge ? 0 : (r() - 0.5) * hb.w / cols * 0.7), j / rows * hb.h + (edge ? 0 : (r() - 0.5) * hb.h / rows * 0.7)]);
+  }
+  SHARDS = [];
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const a = pts[j * (cols + 1) + i], b = pts[j * (cols + 1) + i + 1], c = pts[(j + 1) * (cols + 1) + i + 1], d = pts[(j + 1) * (cols + 1) + i];
+    for (const tri of (r() < 0.5 ? [[a, b, c], [a, c, d]] : [[a, b, d], [b, c, d]])) {
+      const cx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3, cy = (tri[0][1] + tri[1][1] + tri[2][1]) / 3;
+      SHARDS.push({ tri, cx, cy, dx: (cx - hb.w / 2) * 0.10 + (r() - 0.5) * 22, dy: (cy - hb.h / 2) * 0.05 + (r() - 0.5) * 22, rot: (r() - 0.5) * 0.35 });
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ backgrounds */
+function bgPaper(news, tint = null, alpha = 1) {
+  g.drawImage(PAPER, 0, 0);
+  if (news) { g.save(); g.globalAlpha = alpha; g.drawImage(news, 0, 0); g.restore(); }
+  if (tint) { g.save(); g.globalCompositeOperation = 'multiply'; g.fillStyle = tint; g.fillRect(0, 0, W, H); g.restore(); }
+}
+// year headline used by most scenes
+function year(text, t, t0, { y = 330, size = 170, seed = 1, out = null } = {}) { drawRansom(ransom(text, size, seed), 540, y, t, t0, { stagger: 0.07, out }); }
+
+/* ===================================================================== SCENES */
+// 0 — HOOK: close your eyes
+function scene0(t) {
+  g.fillStyle = P.dark; g.fillRect(0, 0, W, H); g.drawImage(PAPER_DARK, 0, 0);
+  const open = B.point - 0.15; // paper tears open
+  // typed "close your eyes"
+  const chars = Math.floor(clamp((t - 0.55) / 0.9) * 15);
+  if (t < open + 0.5) typed(['CLOSE YOUR EYES.'], 540, 430, 64, chars, { color: '#EDE4CF', align: 'center', caret: false });
+  // fingertip traces the contour in the dark
+  const R = PROF.contour, h = 900, w = h * 0.30, top = 560, cx = 540;
+  const outline = []; for (let i = 0; i <= NS; i += 2) outline.push([cx + R[i] * w / 2, top + i / NS * h]);
+  outline.push([cx + R[NS] * w / 2, top + h], [cx - R[NS] * w / 2, top + h]);
+  for (let i = NS; i >= 0; i -= 2) outline.push([cx - R[i] * w / 2, top + i / NS * h]);
+  const prog = eio(ramp(t, 1.2, B.crowd + 0.2));
+  // the crowd of plain bottles
+  const crowdA = ramp(t, B.crowd, B.crowd + 0.5) * (1 - ramp(t, open - 0.2, open + 0.1));
+  if (crowdA > 0) {
+    const Rs = PROF.straight;
+    for (let k = 0; k < 10; k++) {
+      const col = k % 5, row = Math.floor(k / 5), bx = 120 + col * 210, by = row ? 1180 : 540, bh = 360, bw = bh * 0.29;
+      if (Math.abs(bx - 540) < 150) continue;
+      const u = eback(clamp((t - B.crowd - k * 0.04) / 0.3));
+      g.save(); g.globalAlpha = crowdA * 0.55; g.translate(bx, by + bh / 2); g.scale(u, u); g.translate(-bx, -(by + bh / 2));
+      g.setLineDash([10, 9]); vPath(g, Rs, bx, by, bh, bw); g.strokeStyle = '#8F887B'; g.lineWidth = 3; g.stroke(); g.restore();
+    }
+  }
+  if (prog > 0) {
+    g.save(); g.shadowColor = 'rgba(255,214,150,0.9)'; g.shadowBlur = 26;
+    marker(outline, prog, { color: '#FFE9C2', w: 6, key: 3 });
+    g.restore();
+    if (prog < 1) { const p = outline[Math.min(outline.length - 1, Math.floor(prog * outline.length))]; g.save(); g.fillStyle = 'rgba(255,230,180,0.95)'; g.shadowColor = '#FFD08A'; g.shadowBlur = 40; g.beginPath(); g.arc(p[0], p[1], 11, 0, 7); g.fill(); g.restore(); }
+  }
+  // tear open: paper underneath with hero + title
+  if (t > open) {
+    const u = eio(ramp(t, open, open + 0.55));
+    const gap = u * 640; // half-width of the opening
+    g.save();
+    // paper layer under the dark halves
+    g.beginPath(); g.rect(540 - gap - 40, 0, gap * 2 + 80, H); g.clip();
+    hookPaper(t, open);
+    g.restore();
+    // dark halves with torn edges, sliding apart
+    for (const side of [-1, 1]) {
+      const pts = [], r = rng(side > 0 ? 31 : 32), x0 = 540 + side * gap;
+      for (let y = -20; y <= H + 20; y += 22) pts.push([x0 + (r() - 0.5) * 26, y]);
+      g.save(); g.beginPath(); g.moveTo(side < 0 ? -10 : W + 10, -20); pts.forEach(p => g.lineTo(p[0], p[1])); g.lineTo(side < 0 ? -10 : W + 10, H + 20); g.closePath();
+      g.shadowColor = 'rgba(0,0,0,0.55)'; g.shadowBlur = 24; g.shadowOffsetX = side * 6; g.fillStyle = '#1B1916'; g.fill(); g.restore();
+      // white torn fibre edge
+      g.save(); g.strokeStyle = 'rgba(240,232,214,0.9)'; g.lineWidth = 5; g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(p[0] + side * 3, p[1]) : g.moveTo(p[0] + side * 3, p[1])); g.stroke(); g.restore();
+      if (u >= 1) break;
+    }
+  }
+}
+function hookPaper(t, open) {
+  bgPaper(NEWS_C, null, 1);
+  g.save(); g.globalAlpha = 0.9; const b = burst(470, P.red, 1); g.drawImage(b, 540 - 470, 1020 - 470); g.restore();
+  place(strip(300, 1150, P.kraft, 41, { tex: true }), 300, 1000, { rot: -0.12, key: 41 });
+  place(vessel('contour-hero', V.contour()), 560, 1060, { rot: 0.06, key: 42, scale: lerp(1.12, 1, eout(ramp(t, open, open + 0.7))) });
+  tape(560, 618, 170, -0.25, 43);
+  drawRansom(ransom('WHY THIS\nSHAPE?', 132, 4), 540, 330, t, open + 0.25, { stagger: 0.035 });
+}
+
+// 1 — 1886: soda fountain, no bottle
+function scene1(t) {
+  bgPaper(NEWS_A, null, 1);
+  const t0 = T.s1;
+  kicker("JACOBS' PHARMACY · ATLANTA", 540, 455, t, t0 + 0.35, { key: 1, rot: 0.01 });
+  year('1886', t, B.y1886 - 0.25, { y: 600, seed: 2 });
+  const u = eback(ramp(t, t0 + 0.25, t0 + 0.85));
+  g.save(); g.globalAlpha = 0.85 * ramp(t, t0 + 0.2, t0 + 0.6); const bb = burst(380, P.red, 2); g.drawImage(bb, 520 - 380, 1130 - 380); g.restore();
+  place(strip(640, 260, P.ink, 51), 470, 1300, { rot: -0.05, key: 51, alpha: ramp(t, t0 + 0.1, t0 + 0.4) });
+  const fg = vessel('glass', V.glass(820));
+  place(fg, 470, 1100 + (1 - u) * 700, { rot: -0.04, key: 52 });
+  // rising bubbles inside the glass
+  if (u > 0.9) {
+    const gl = V.glass(820), top = 1100 - gl.h / 2 + 18;
+    g.save(); g.fillStyle = 'rgba(255,250,240,0.85)';
+    for (let i = 0; i < 16; i++) {
+      const r = rng(i * 7 + 3), sp = 120 + r() * 140, ph = r(), yy = 1 - ((t * sp / gl.h + ph) % 1), yAbs = top + gl.h * (0.13 + yy * 0.5);
+      const rr = PROF.glass[Math.round((yAbs - top) / gl.h * NS)] * gl.w / 2 * 0.8;
+      g.beginPath(); g.arc(470 - 20 + (r() - 0.5) * 2 * rr, yAbs, 3 + r() * 4, 0, 7); g.fill();
+    }
+    g.restore();
+  }
+  // foam
+  // 5 cent price tag swings in
+  if (t > B.cents - 0.1) {
+    const v = ramp(t, B.cents - 0.1, B.cents + 0.3), sw = Math.sin((t - B.cents) * 7) * Math.exp(-(t - B.cents) * 2.5) * 0.25;
+    const tag = cached('tag5', () => makeCut(210, 290, (x, w, h) => {
+      x.beginPath(); x.moveTo(w * 0.28, 0); x.lineTo(w * 0.72, 0); x.lineTo(w, h * 0.2); x.lineTo(w, h); x.lineTo(0, h); x.lineTo(0, h * 0.2); x.closePath();
+      x.fillStyle = P.kraft; x.fill(); x.fillStyle = P.paper; x.beginPath(); x.arc(w / 2, h * 0.13, 14, 0, 7); x.fill();
+      x.fillStyle = P.ink; x.textAlign = 'center'; x.textBaseline = 'middle'; x.font = `400 150px 'Abril Fatface'`; x.fillText('5¢', w / 2, h * 0.57);
+      x.font = `700 26px 'Courier Prime'`; x.fillText('A GLASS', w / 2, h * 0.86);
+    }, { border: 8, seed: 3 }));
+    g.save(); g.translate(880, 680 - (1 - eout(v)) * 500); g.rotate(sw);
+    g.strokeStyle = P.ink2; g.lineWidth = 3; g.beginPath(); g.moveTo(0, -260); g.lineTo(0, -10); g.stroke();
+    g.translate(0, 130); place(tag, 0, 0, { rot: 0.05, key: 61 }); g.restore();
+  }
+  // no bottle (yet)
+  const nb = B.nobottle - 0.2;
+  if (t > nb - 0.15) {
+    const v = ramp(t, nb - 0.15, nb + 0.3), R = PROF.straight, h = 340, w = h * 0.29, cx = 860, top = 1010;
+    g.save(); g.globalAlpha = v; g.setLineDash([12, 10]); g.lineWidth = 4; g.strokeStyle = P.ink2; vPath(g, R, cx, top, h, w); g.stroke(); g.restore();
+    marker([[cx - 85, top + 70], [cx + 85, top + 310]], ramp(t, nb + 0.1, nb + 0.28), { w: 12, key: 62 });
+    marker([[cx + 85, top + 70], [cx - 85, top + 310]], ramp(t, nb + 0.26, nb + 0.44), { w: 12, key: 63 });
+    markerText('NO BOTTLE!', cx - 30, top + 395, 52, ramp(t, nb + 0.35, nb + 0.7), { key: 64, rot: -0.06 });
+  }
+}
+
+// 2 — 1894 to 1915: straight glass, paper labels, ice tubs, copycats
+function diamondLabel(text = '5¢', sz = 110) {
+  return cached('diamond:' + text + sz, () => makeCut(sz, sz, (x, w, h) => {
+    x.translate(w / 2, h / 2); x.rotate(Math.PI / 4); const s = w / Math.SQRT2;
+    x.fillStyle = P.cream; x.fillRect(-s / 2, -s / 2, s, s); x.strokeStyle = P.red; x.lineWidth = 4; x.strokeRect(-s / 2 + 6, -s / 2 + 6, s - 12, s - 12);
+    x.rotate(-Math.PI / 4); x.fillStyle = P.red; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.font = `700 ${sz * 0.14}px 'Old Standard TT'`; x.fillText('BOTTLED', 0, -sz * 0.18);
+    x.font = `400 ${sz * 0.3}px 'Abril Fatface'`; x.fillText(text, 0, sz * 0.08);
+  }, { border: 3, seed: 9, shadow: true }));
+}
+function copyLabel(name, seed) {
+  return cached('copy:' + name, () => {
+    g.font = `400 40px Anton`; const tw = g.measureText(name).width;
+    return makeCut(tw + 34, 64, (x, w, h) => {
+      polyPath(x, tornRectPoly(w, h, seed, { torn: 'lr', amp: 4, step: 8 })); x.fillStyle = seed % 2 ? P.white : P.cream; x.fill();
+      x.fillStyle = seed % 3 ? P.red : P.ink; x.font = `400 40px Anton`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(name, w / 2, h / 2 + 2);
+    }, { border: 0, seed });
+  });
+}
+function scene2(t) {
+  bgPaper(NEWS_B, null, 1);
+  const t0 = T.s2;
+  kicker('THE BOTTLING ERA', 540, 455, t, t0 + 0.3, { key: 2, bg: P.ink, fg: P.white, rot: -0.02 });
+  year('1894', t, t0 + 0.1, { y: 600, seed: 3, out: B.copy - 0.2 });
+  // red strip behind
+  place(strip(1200, 420, P.red, 71, { tex: false }), 540, 1180, { rot: -0.06, key: 71, alpha: ramp(t, t0 + 0.05, t0 + 0.35) });
+  const iceIn = eio(ramp(t, B.ice - 0.25, B.ice + 0.3)), iceOut = eio(ramp(t, B.copy - 0.35, B.copy + 0.05));
+  const copyU = eio(ramp(t, B.copy - 0.15, B.copy + 0.5));
+  // the hutchinson + straight-sided pair, then the lineup of look-alikes
+  const sink = (iceIn - iceOut) * 150;
+  const hu = eback(ramp(t, t0 + 0.25, t0 + 0.75)), su = eback(ramp(t, B.plain - 0.4, B.plain + 0.1));
+  const hx = lerp(330, -300, copyU), sx = lerp(720, 540, copyU);
+  if (hx > -250) place(vessel('hutch', V.hutch(680)), hx, 1090 + (1 - hu) * 1300 + sink, { rot: -0.05, key: 72 });
+  if (copyU > 0) {
+    const names = [['KOKA-NOLA', 230, -0.05, 0], ['TOKA-COLA', 850, 0.05, 0.12]];
+    for (const [nm, x, rot, dl] of names) {
+      const v = eback(ramp(t, B.copy + dl, B.copy + dl + 0.45));
+      const bx = x + (1 - v) * (x < 540 ? -500 : 500);
+      place(vessel('straight680', V.straight(680)), bx, 1060, { rot, key: 80 + x });
+      const lv = ramp(t, B.koka - 0.1 + dl * 2, B.koka + 0.15 + dl * 2);
+      if (lv > 0) place(copyLabel(nm, 3 + x), bx, 1150, { rot: rot * 2 - 0.04, key: 81 + x, scale: lerp(1.6, 1, eout(lv)), alpha: lv });
+    }
+  }
+  place(vessel('straight680', V.straight(680)), sx, lerp(1090, 1060, copyU) + (1 - su) * 1300 + sink, { rot: lerp(0.04, 0, copyU), key: 73 });
+  // the paper label: slapped on, then floats off in the ice tub, then a fresh one for the lineup
+  const lab = diamondLabel(), lt = B.label + 0.25;
+  if (t > lt && t < B.copy + 0.1) {
+    const v = ramp(t, lt, lt + 0.15), f = ramp(t, B.ice + 0.25, B.copy);
+    const lx = 720 + f * 150 + Math.sin(f * 9) * 18, ly = 1180 + sink * (1 - f) + f * (1210 - 1180) - Math.sin(f * 3.14) * 20;
+    place(lab, lx, ly, { rot: 0.04 + f * 1.6, scale: lerp(1.5, 1, eout(v)), alpha: v * (1 - ramp(t, B.copy - 0.2, B.copy + 0.1)), key: 74 });
+  }
+  if (copyU > 0.6) place(lab, 540, 1150, { rot: 0.02, key: 75, alpha: ramp(t, B.koka - 0.3, B.koka - 0.1), scale: lerp(1.5, 1, eout(ramp(t, B.koka - 0.3, B.koka - 0.1))) });
+  // annotations
+  if (t < B.ice) {
+    markerText('plain glass', 300, 1500 - 40, 46, ramp(t, B.plain, B.plain + 0.4), { key: 76, rot: -0.05 });
+    marker(curve(640, 1395, 712, 1240, -0.25), ramp(t, B.label + 0.2, B.label + 0.5), { key: 77, head: true, w: 7 });
+    markerText('+ paper label', 760, 1430, 46, ramp(t, B.label + 0.2, B.label + 0.6), { key: 78, rot: 0.03 });
+  }
+  // ice tub
+  const tubA = iceIn - iceOut;
+  if (tubA > 0) {
+    const ty = lerp(1900, 1150, tubA);
+    g.save();
+    // water body
+    g.fillStyle = 'rgba(127,169,184,0.62)'; g.beginPath(); g.moveTo(0, ty);
+    for (let x = 0; x <= W; x += 20) g.lineTo(x, ty + Math.sin(x * 0.02 + TICK * 0.9) * 7);
+    g.lineTo(W, H); g.lineTo(0, H); g.closePath(); g.fill();
+    halftone(g, 0, ty, W, 400, 14, (px, py) => 0.12 + 0.25 * ((py - ty) / 400), 'rgba(40,80,100,0.5)');
+    // ice cubes
+    for (let i = 0; i < 9; i++) {
+      const r = rng(i + 400), cxI = 60 + i * 120 + r() * 30, cyI = ty + 10 + r() * 40, s = 60 + r() * 30;
+      const [jx, jy, jr] = jit(500 + i, 2);
+      g.save(); g.translate(cxI + jx, cyI + jy); g.rotate(r() + jr * 0.03);
+      g.fillStyle = 'rgba(240,250,252,0.85)'; g.strokeStyle = P.ink; g.lineWidth = 3; g.beginPath(); g.rect(-s / 2, -s / 2, s, s); g.fill(); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.9)'; g.fillRect(-s / 2 + 8, -s / 2 + 8, s * 0.25, s * 0.5); g.restore();
+    }
+    // tub rim (galvanised)
+    g.restore();
+    markerText('ICE WATER', 820, ty + 150, 48, ramp(t, B.ice + 0.3, B.ice + 0.7), { key: 79, color: P.white, rot: -0.04 });
+  }
+  if (t > B.same) {
+    markerText('?', 230, 760, 120, ramp(t, B.same, B.same + 0.25), { key: 90, rot: -0.15 });
+    markerText('?', 850, 760, 120, ramp(t, B.same + 0.15, B.same + 0.4), { key: 91, rot: 0.15 });
+    markerText('?', 540, 720, 120, ramp(t, B.same + 0.3, B.same + 0.55), { key: 92, rot: 0.05 });
+    drawStamp('WHICH IS REAL?', 540, 580, -0.04, t, B.same + 0.75, { size: 70 });
+  }
+}
+
+// 3 — 1915: the brief; in the dark; broken on the ground
+const MEMO = ['WANTED:', 'A bottle so distinct', 'you could recognize it', 'by feel in the dark,', 'or lying broken', 'on the ground.'];
+function scene3(t) {
+  bgPaper(NEWS_C, null, 1);
+  const t0 = T.s3, dark = ramp(t, B.feel - 0.35, B.feel), lightBack = ramp(t, B.broken - 0.3, B.broken + 0.05);
+  year('1915', t, B.y1915 - 0.3, { y: 600, seed: 5 });
+  kicker('MEMO TO GLASS MAKERS', 540, 455, t, t0 + 0.3, { key: 3, rot: 0.015 });
+  // typed memo
+  const memo = cached('memo', () => makeCut(860, 600, (x, w, h) => {
+    polyPath(x, tornRectPoly(w, h, 88, { torn: 'b', amp: 8, step: 12 })); x.fillStyle = P.white; x.fill();
+    x.strokeStyle = 'rgba(160,60,60,0.35)'; x.lineWidth = 2; x.beginPath(); x.moveTo(80, 0); x.lineTo(80, h); x.stroke();
+    x.strokeStyle = 'rgba(80,120,170,0.25)'; x.lineWidth = 1.5; for (let y = 120; y < h; y += 70) { x.beginPath(); x.moveTo(0, y); x.lineTo(w, y); x.stroke(); }
+  }, { border: 0, seed: 88 }));
+  const mu = eback(ramp(t, t0 + 0.2, t0 + 0.7)), mx = 540, my = 1110 + (1 - mu) * 900;
+  const memoA = 1 - dark;
+  if (memoA > 0) {
+    g.save(); g.globalAlpha = memoA;
+    place(memo, mx, my, { rot: -0.025, key: 101 });
+    tape(mx - 330, my - 300, 150, -0.6, 102); tape(mx + 330, my - 300, 150, 0.6, 103);
+    const total = MEMO.join('').length, typeStart = B.asked - 0.45, typeEnd = B.feel - 0.4;
+    const n = Math.floor(clamp((t - typeStart) / (typeEnd - typeStart)) * total);
+    g.save(); g.translate(mx, my); g.rotate(-0.025);
+    typed(MEMO, -330, -175, 54, n, { font: 'Courier Prime', lh: 1.30 });
+    g.restore(); g.restore();
+  }
+  // lights out
+  if (dark > 0) {
+    g.save(); g.globalAlpha = dark; g.fillStyle = P.dark; g.fillRect(0, 0, W, H); g.globalAlpha *= 0.9; g.drawImage(PAPER_DARK, 0, 0); g.restore();
+    const R = PROF.contour, h = 780, w = h * 0.30, top = 760, cx = 540;
+    const pts = []; for (let i = 0; i <= NS; i += 2) pts.push([cx + R[i] * w / 2, top + i / NS * h]);
+    const pts2 = []; for (let i = 0; i <= NS; i += 2) pts2.push([cx - R[i] * w / 2, top + i / NS * h]);
+    const p = eio(ramp(t, B.feel - 0.1, B.broken - 0.3));
+    const a = 1 - lightBack;
+    if (a > 0) {
+      g.save(); g.globalAlpha = a; g.shadowColor = 'rgba(255,210,140,0.95)'; g.shadowBlur = 30;
+      marker(pts, p, { color: '#FFE7BD', w: 6, key: 110 }); marker(pts2, p, { color: '#FFE7BD', w: 6, key: 111 });
+      g.restore();
+      // two fingertips
+      for (const L of [pts, pts2]) if (p > 0 && p < 1) { const q = L[Math.min(L.length - 1, Math.floor(p * L.length))]; g.save(); g.globalAlpha = a; g.fillStyle = '#FFE3B0'; g.shadowColor = '#FFC870'; g.shadowBlur = 40; g.beginPath(); g.arc(q[0], q[1], 12, 0, 7); g.fill(); g.restore(); }
+      g.save(); g.globalAlpha = a; typed(['BY FEEL, IN THE DARK'], 540, 600, 54, Math.floor(ramp(t, B.feel - 0.1, B.dark + 0.2) * 20), { color: '#EDE4CF', align: 'center', caret: false }); g.restore();
+    }
+  }
+  // broken on the ground
+  if (lightBack > 0) {
+    const hb = vessel('contour-hero', V.contour()), k = eout(ramp(t, B.broken, B.broken + 0.35));
+    g.save(); g.globalAlpha = lightBack; g.translate(540, 1150); g.rotate(-Math.PI / 2 + 0.12); g.scale(0.82, 0.82);
+    for (const s of SHARDS) {
+      g.save(); g.translate(s.dx * k * 1.6, s.dy * k * 1.6); g.translate(s.cx - hb.w / 2, s.cy - hb.h / 2); g.rotate(s.rot * k); g.translate(-(s.cx - hb.w / 2), -(s.cy - hb.h / 2));
+      g.beginPath(); s.tri.forEach((q, i) => i ? g.lineTo(q[0] - hb.w / 2, q[1] - hb.h / 2) : g.moveTo(q[0] - hb.w / 2, q[1] - hb.h / 2)); g.closePath(); g.save(); g.clip();
+      g.drawImage(hb.c, -hb.w / 2, -hb.h / 2); g.restore();
+      g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 1.2 * k; g.stroke(); g.restore();
+    }
+    g.restore();
+    markerText('still recognizable.', 540, 1420, 60, ramp(t, B.broken + 0.4, B.broken + 0.9), { color: '#FFE7BD', key: 112, rot: -0.03 });
+    typed(['...OR BROKEN.'], 540, 600, 54, Math.floor(ramp(t, B.broken - 0.1, B.broken + 0.3) * 13), { color: '#EDE4CF', align: 'center', caret: false });
+  }
+}
+
+// 4 — Root Glass Co: the encyclopedia, the cocoa pod, the morph
+function bookPage(side) {
+  return cached('page' + side, () => makeCut(470, 760, (x, w, h) => {
+    x.fillStyle = '#EFE3C4'; x.fillRect(0, 0, w, h);
+    const gr = x.createLinearGradient(side < 0 ? w : 0, 0, side < 0 ? w - 60 : 60, 0); gr.addColorStop(0, 'rgba(90,60,20,0.35)'); gr.addColorStop(1, 'rgba(90,60,20,0)'); x.fillStyle = gr; x.fillRect(0, 0, w, h);
+    x.fillStyle = P.ink; x.textAlign = 'center'; x.font = `700 20px 'Old Standard TT'`; x.fillText(side < 0 ? 'ENCYCLOPÆDIA' : 'BRITANNICA', w / 2, 42);
+    x.fillRect(40, 54, w - 80, 1.5);
+    const r = rng(side < 0 ? 5 : 6); x.textAlign = 'left';
+    const heads = side < 0 ? [['COCA', 80], ['KOLA', 430]] : [['COCOA', 80]];
+    let y = 80;
+    for (let k = 0; k < 30 && y < h - 40; k++) {
+      const hd = heads.find(hh => Math.abs(hh[1] - y) < 14);
+      if (hd) { x.font = `700 34px 'Old Standard TT'`; x.fillText(hd[0] + '.', 40, y + 30); y += 46; continue; }
+      x.font = `400 15px 'Old Standard TT'`; let s = ''; while (x.measureText(s).width < w - 90) s += WORDS[Math.floor(r() * WORDS.length)] + ' ';
+      x.fillText(s, 40, y + 18); y += 21;
+      if (side > 0 && Math.abs(y - 180) < 11) y += 400; // room for the engraving
+      if (side < 0 && Math.abs(y - 200) < 11) y += 170;
+      if (side < 0 && Math.abs(y - 560) < 11) y += 150;
+    }
+    // tiny engravings: coca leaf sprig and kola nuts
+    x.strokeStyle = P.ink; x.lineWidth = 1.6;
+    if (side < 0) {
+      for (let i = 0; i < 5; i++) { x.save(); x.translate(130 + i * 50, 300 + (i % 2) * 20); x.rotate(-0.6 + i * 0.3); x.beginPath(); x.ellipse(0, 0, 14, 34, 0, 0, 7); x.stroke(); x.beginPath(); x.moveTo(0, -34); x.lineTo(0, 34); x.stroke(); for (let j = -3; j <= 3; j++) { x.beginPath(); x.moveTo(0, j * 9); x.lineTo(10, j * 9 - 6); x.stroke(); } x.restore(); }
+      for (let i = 0; i < 3; i++) { x.beginPath(); x.ellipse(160 + i * 80, 650, 32, 24, i, 0, 7); x.stroke(); for (let j = 0; j < 8; j++) { x.beginPath(); x.moveTo(140 + i * 80 + j * 5, 635); x.lineTo(136 + i * 80 + j * 5, 668); x.stroke(); } }
+    }
+  }, { border: 0, seed: 70 + side }));
+}
+function scene4(t) {
+  bgPaper(NEWS_B, null, 1);
+  const t0 = T.s4;
+  kicker('ROOT GLASS CO.  TERRE HAUTE, IND.', 540, 455, t, t0 + 0.25, { key: 4, size: 32, out: B.cocoa - 0.2 });
+  year('1915', t, t0 + 0.05, { y: 300, size: 120, seed: 6 });
+  // Earl R. Dean name card
+  const card = cached('dean', () => makeCut(430, 150, (x, w, h) => {
+    x.fillStyle = P.cream; x.fillRect(0, 0, w, h); x.strokeStyle = P.ink; x.lineWidth = 2; x.strokeRect(8, 8, w - 16, h - 16);
+    x.fillStyle = P.ink; x.textAlign = 'center'; x.font = `700 46px 'Playfair Display'`; x.fillText('Earl R. Dean', w / 2, 72);
+    x.font = `400 22px 'Courier Prime'`; x.fillText('BOTTLE DESIGNER', w / 2, 112);
+  }, { border: 6, seed: 4 }));
+  const zoom = eio(ramp(t, B.cocoa - 0.35, B.cocoa + 0.45)); // book -> pod
+  const bookA = 1 - ramp(t, B.cocoa + 0.1, B.cocoa + 0.5);
+  if (bookA > 0) {
+    const bu = eback(ramp(t, t0 + 0.2, t0 + 0.75));
+    g.save(); g.globalAlpha = bookA; g.translate(540, 1090 + (1 - bu) * 1100); g.scale(lerp(0.9, 2.0, zoom), lerp(0.9, 2.0, zoom)); g.translate(-lerp(0, 240, zoom), -lerp(0, -40, zoom));
+    // book cover
+    place(strip(1000, 820, '#5A2A1E', 120, { torn: '' }), 0, 0, { key: 120, boil: 0.5 });
+    place(bookPage(-1), -240, 0, { key: 121, boil: 0.5 }); place(bookPage(1), 240, 0, { key: 122, boil: 0.5 });
+    // pod engraving on the right page (line art)
+    g.save(); g.translate(240, 60); g.strokeStyle = P.ink; g.lineWidth = 2;
+    const R = PROF.pod, ph = 320, pw = ph * 0.48;
+    vPath(g, R, 0, -ph / 2, ph, pw); g.stroke();
+    for (let k = 0; k < 7; k++) { const u = Math.sin(-1.2 + 2.4 * k / 6); g.beginPath(); for (let i = 10; i < NS - 8; i += 6) g.lineTo(u * R[i] * pw / 2, -ph / 2 + i / NS * ph); g.stroke(); }
+    g.restore();
+    // marker circles on COCA / KOLA, question marks
+    marker(loop(-330, -260, 90, 34, 3), ramp(t, B.coca - 0.1, B.coca + 0.25), { key: 123, w: 6 });
+    marker(loop(-330, 90, 90, 34, 4), ramp(t, B.coca + 0.35, B.coca + 0.7), { key: 124, w: 6 });
+    g.restore();
+    // magnifier sweeping
+    const mg = ramp(t, B.coca - 0.6, B.cocoa - 0.2);
+    if (mg > 0 && zoom < 0.5) {
+      const mxp = lerp(300, 790, eio(mg)), myp = lerp(900, 1080, eio(mg)) + Math.sin(mg * 9) * 40;
+      g.save(); g.globalAlpha = 1 - zoom * 2; g.lineWidth = 16; g.strokeStyle = '#2B2622'; g.beginPath(); g.arc(mxp, myp, 95, 0, 7); g.stroke();
+      g.lineWidth = 26; g.strokeStyle = '#6B3B22'; g.beginPath(); g.moveTo(mxp + 70, myp + 70); g.lineTo(mxp + 190, myp + 190); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.18)'; g.beginPath(); g.arc(mxp, myp, 88, 0, 7); g.fill(); g.restore();
+    }
+    place(card, 760, 610, { rot: 0.05, key: 125, alpha: bookA * ramp(t, B.dean - 0.1, B.dean + 0.2), scale: lerp(1.4, 1, eout(ramp(t, B.dean - 0.1, B.dean + 0.2))) });
+    if (t > B.dean - 0.1) tape(760, 540, 120, 0.1, 126);
+  }
+  // the pod, then the morph into the bottle
+  if (zoom > 0) {
+    const m = eio(ramp(t, B.perfect + 0.35, B.ribs + 0.25));
+    g.save(); g.globalAlpha = 0.8 * zoom; const bb = burst(430, m < 0.5 ? '#A3561E' : P.red, 4); g.drawImage(bb, 540 - 430, 1080 - 430); g.restore();
+    const pod = V.pod(780), bot = V.contour(820);
+    const o = {
+      R: mixProf(pod.R, bot.R, m), h: lerp(pod.h, bot.h, m), w: lerp(pod.w, bot.w, m),
+      colors: { base: hexMix(P.pod, P.green, m), dot: hexMix(P.podDot, P.greenDot, m), liq: hexMix(P.pod, P.cola, m), liqDot: hexMix(P.podDot, P.colaDot, m) },
+      liquid: lerp(0.0, 0.235, m), flutes: [[lerp(0.06, 0.555, m), lerp(0.95, 0.965, m)], ...(m > 0.5 ? [[0.20, 0.335]] : [])], nFl: 11, ribW: lerp(1.8, 1, m),
+      cap: m < 0.5 ? 'stem' : 'crown', capCol: '#B9B2A2', seed: 11, hiFrom: 0.08,
+    };
+    const s = lerp(0.6, 1, eout(zoom));
+    g.save(); g.translate(540, 1080); g.scale(s, s); vesselLive(o, 0, 0, lerp(0.08, 0.02, m), 130); g.restore();
+    if (m < 0.05) markerText('cocoa pod', 790, 760, 54, ramp(t, B.cocoa + 0.2, B.cocoa + 0.6), { key: 131, rot: 0.08 });
+    drawStamp('WRONG PLANT', 300, 720, -0.14, t, B.wrong, { size: 76, out: B.ribs - 0.2 });
+    drawStamp('PERFECT SHAPE', 760, 1400, 0.08, t, B.perfect, { size: 66, color: P.ink, out: B.ribs - 0.2 });
+    if (t > B.ribs - 0.1) {
+      const k = ramp(t, B.ribs - 0.1, B.ribs + 0.4), R = PROF.contour, h = 820, w = h * 0.3, top = 1080 - h / 2;
+      for (const th of [-0.7, 0.7]) { const pts = []; const u = Math.sin(th); for (let i = Math.round(0.6 * NS); i < 0.93 * NS; i += 4) pts.push([540 + u * R[i] * w / 2, top + i / NS * h]); marker(pts, k, { key: 132 + th * 10, w: 5 }); }
+      markerText('ribs', 250, 1250, 64, k, { key: 135, rot: -0.1 });
+      marker(curve(270, 1225, 430, 1290, -0.2), k, { key: 136, w: 6, head: true });
+    }
+    if (t > B.belly - 0.1) {
+      const k = ramp(t, B.belly - 0.1, B.belly + 0.4);
+      marker(loop(540, 1305, 160, 70, 8), k, { key: 137, w: 6 });
+      markerText('belly', 860, 1330, 60, k, { key: 138, rot: 0.08 });
+    }
+    drawStamp('DESIGN PATENT', 540, 520, -0.05, t, B.contour - 0.15, { size: 64, sub: 'NOV. 16, 1915', color: P.red });
+  }
+}
+
+// 5 — 1916: wobble on the line, slimmed down, the hobble skirt
+function hobbleLady() {
+  return cached('lady', () => makeCut(330, 900, (x, w, h) => {
+    const cx = w / 2;
+    // dress profile (hips wide, ankles tight) rendered like a fashion plate in red halftone
+    const R = profile([[0, .0], [.02, .30], [.10, .36], [.16, .62], [.24, .52], [.30, .70], [.40, .90], [.52, .80], [.66, .58], [.80, .40], [.93, .30], [.97, .36], [1, .38]], 3);
+    const top = 210, dh = h - top - 20, dw = w * 0.86;
+    x.save(); vPath(x, R, cx, top, dh, dw); x.clip(); x.fillStyle = '#E8B7A6'; x.fillRect(0, 0, w, h);
+    halftone(x, 0, top, w, dh, 8, (px, py) => { const r = R[clamp(Math.round((py - top) / dh * NS), 0, NS)] * dw / 2, u = (px - cx) / (r || 1); return Math.abs(u) > 1 ? -1 : 0.35 + 0.5 * (1 - Math.max(0, -0.4 * u + 0.9 * Math.sqrt(Math.max(0, 1 - u * u)))); }, P.red2);
+    x.restore(); vPath(x, R, cx, top, dh, dw); x.lineWidth = 3; x.strokeStyle = P.ink; x.stroke();
+    // belt + hem lines
+    x.fillStyle = P.ink; x.fillRect(cx - dw * 0.27, top + dh * 0.235, dw * 0.54, 10);
+    x.lineWidth = 2; x.beginPath(); x.moveTo(cx - dw * 0.15, top + dh * 0.93); x.lineTo(cx + dw * 0.15, top + dh * 0.93); x.stroke();
+    // head + neck + giant hat
+    x.fillStyle = '#E9D2B8'; x.beginPath(); x.ellipse(cx, 175, 42, 52, 0, 0, 7); x.fill(); x.stroke();
+    x.fillRect(cx - 16, 215, 32, 22);
+    x.fillStyle = P.ink; x.beginPath(); x.ellipse(cx, 128, 150, 34, -0.08, 0, 7); x.fill();
+    x.beginPath(); x.ellipse(cx + 5, 105, 70, 46, 0, Math.PI, 0); x.fill();
+    x.strokeStyle = P.ink; x.lineWidth = 5; x.beginPath(); x.moveTo(cx + 40, 90); x.bezierCurveTo(cx + 90, 20, cx + 160, 30, cx + 140, 70); x.stroke();
+    for (let i = 0; i < 12; i++) { x.lineWidth = 2; x.beginPath(); x.moveTo(cx + 60 + i * 7, 60 - Math.sin(i / 3) * 18); x.lineTo(cx + 66 + i * 7, 40 - Math.sin(i / 3) * 18); x.stroke(); }
+    // feet
+    x.fillStyle = P.ink; x.beginPath(); x.ellipse(cx - 12, h - 20, 18, 8, 0, 0, 7); x.ellipse(cx + 14, h - 18, 18, 8, 0, 0, 7); x.fill();
+  }, { border: 12, seed: 61 }));
+}
+function scene5(t) {
+  bgPaper(NEWS_C, null, 1);
+  const t0 = T.s5;
+  year('1916', t, t0 + 0.05, { y: 330, size: 150, seed: 7 });
+  kicker('THE FIRST PRODUCTION RUN', 540, 470, t, t0 + 0.3, { key: 5, bg: P.ink, fg: P.white, out: B.people - 0.4 });
+  const exit = eio(ramp(t, B.people - 0.5, B.people));
+  // conveyor
+  const beltY = 1300, beltA = 1 - exit;
+  if (beltA > 0) {
+    g.save(); g.globalAlpha = beltA; g.translate(0, exit * 300);
+    place(strip(1240, 70, '#4A4640', 140, { torn: '' }), 540, beltY + 35, { key: 140, boil: 0.4 });
+    g.strokeStyle = 'rgba(255,255,255,0.25)'; g.lineWidth = 4;
+    const off = (Math.floor(t * 12) * 9) % 60;
+    for (let x = -60 + off; x < W + 60; x += 60) { g.beginPath(); g.moveTo(x, beltY + 12); g.lineTo(x - 18, beltY + 58); g.stroke(); }
+    for (let x = 40; x < W; x += 125) { g.fillStyle = '#8A857C'; g.beginPath(); g.arc(x, beltY + 95, 26, 0, 7); g.fill(); g.strokeStyle = P.ink; g.lineWidth = 3; g.stroke(); g.fillStyle = P.ink; g.beginPath(); g.arc(x, beltY + 95, 6, 0, 7); g.fill(); }
+    g.restore();
+  }
+  // bottles on the line: fat prototypes that wobble, the middle one gets slimmed
+  const slim = eio(ramp(t, B.slim - 0.1, B.slim + 0.55));
+  const travel = (t - t0) * 25;
+  for (let k = -1; k <= 1; k++) {
+    const isHero = k === 0;
+    const bx = 540 + k * 400 + (isHero ? 0 : travel - 60) + (isHero ? lerp(0, -230, exit) : 0);
+    const wob = Math.sin((t - t0) * 9 + k * 1.7) * 0.07 * (1 - (isHero ? slim : 0)) * ramp(t, B.wobble - 0.3, B.wobble);
+    const h = 640;
+    if (!isHero && beltA <= 0) continue;
+    g.save(); if (!isHero) { g.globalAlpha = beltA * (1 - slim); g.translate(0, exit * 300); }
+    const base = beltY;
+    if (isHero && slim > 0) {
+      const o = V.proto(h), c = V.contour(h);
+      const live = { ...c, R: mixProf(o.R, c.R, slim), w: lerp(o.w, c.w, slim) };
+      // pivot at the base so it rocks
+      g.save(); g.translate(bx, base); g.rotate(wob); vesselLive(live, 0, -h / 2 - 4, 0, 150 + k); g.restore();
+    } else {
+      const cut = vessel('proto640', V.proto(h));
+      g.save(); g.translate(bx, base); g.rotate(wob); place(cut, 0, -cut.h / 2 + 30, { key: 150 + k }); g.restore();
+    }
+    g.restore();
+  }
+  // "wobble" marks
+  if (t > B.wobble && slim < 0.5) {
+    markerText('wobble', 540, 640, 66, ramp(t, B.wobble, B.wobble + 0.4), { key: 151, rot: -0.05 + Math.sin(t * 9) * 0.04 });
+  }
+  if (t > B.slim - 0.1 && t < B.people) {
+    const k = ramp(t, B.slim, B.slim + 0.35);
+    marker([[240, 1060], [370, 1060]], k, { key: 155, w: 9, head: true }); marker([[840, 1060], [710, 1060]], k, { key: 156, w: 9, head: true });
+    markerText('slimmer', 540, 640, 66, k, { key: 157, rot: 0.03 });
+  }
+  // hobble skirt clipping
+  if (exit > 0) {
+    const u = eback(ramp(t, B.people - 0.2, B.people + 0.35));
+    place(strip(470, 1020, P.news, 160, { tex: true, draw: (x, w, h) => { x.fillStyle = P.ink; x.font = `italic 400 28px 'Old Standard TT'`; x.textAlign = 'center'; x.fillText('The Hobble Skirt', w / 2, h - 46); x.font = `400 18px 'Old Standard TT'`; x.fillText('FASHION PLATE · 1912', w / 2, h - 20); } }), 760 + (1 - u) * 700, 1000, { rot: 0.04, key: 160 });
+    place(hobbleLady(), 760 + (1 - u) * 700, 960, { rot: 0.04, key: 161, scale: 0.98 });
+    tape(760 + (1 - u) * 700, 500, 160, -0.08, 162);
+    markerText('=', 545, 1020, 120, ramp(t, B.hobble - 0.1, B.hobble + 0.2), { key: 163, rot: 0 });
+    markerText('"hobble skirt"', 540, 1440, 70, ramp(t, B.hobble - 0.05, B.hobble + 0.5), { key: 164, rot: -0.04 });
+  }
+}
+
+// 6 — 1957 painted label, 1960 trademark, 1993 plastic
+function scene6(t) {
+  bgPaper(NEWS_B, null, 1);
+  const t0 = T.s6;
+  const y57 = t0 + 0.1, y60 = B.y1960 - 0.1, y93 = B.plastic - 0.35;
+  year('1957', t, y57, { y: 330, size: 150, seed: 8, out: y60 - 0.25 });
+  year('1960', t, y60, { y: 330, size: 150, seed: 9, out: y93 - 0.25 });
+  year('1993', t, y93, { y: 330, size: 150, seed: 10 });
+  const plasticU = eio(ramp(t, y93, y93 + 0.6));
+  g.save(); g.globalAlpha = 0.85; const bb = burst(420, P.red, 6); g.drawImage(bb, lerp(540, 330, plasticU) - 420, 1080 - 420); g.restore();
+  place(strip(380, 1100, P.kraft, 170, { tex: true }), lerp(560, 330, plasticU), 1060, { rot: 0.07, key: 170 });
+  const bu = eback(ramp(t, t0 + 0.15, t0 + 0.65));
+  const bx = lerp(540, 330, plasticU), by = 1060 + (1 - bu) * 900;
+  place(vessel('contour-hero', V.contour()), bx, by, { rot: -0.03, key: 171 });
+  // painted (applied colour) label: white brush paint revealed left to right
+  const pv = ramp(t, B.painted - 0.1, B.y1957 + 0.3);
+  if (pv > 0) {
+    const h = VH, w = h * 0.3, top = vesselTop(V.contour(), by);
+    const ly = top + 0.415 * h;
+    const [jx, jy] = jit(171, 1.2);
+    g.save(); g.translate(jx, jy); g.translate(bx, by); g.rotate(-0.03); g.translate(-bx, -by);
+    g.beginPath(); g.rect(bx - w / 2, ly - 70, w * pv, 140); g.clip();
+    g.fillStyle = P.white; g.font = `italic 900 ${Math.round(w * 0.30)}px 'Playfair Display'`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('6½ oz', bx, ly - 6);
+    g.fillRect(bx - w * 0.36, ly + 34, w * 0.72, 6); g.fillRect(bx - w * 0.30, ly - 46, w * 0.6, 4);
+    g.restore();
+    // brush
+    if (pv < 1) { const px = bx - w / 2 + w * pv; g.save(); g.translate(px, ly); g.rotate(-0.6); g.fillStyle = '#7B4A2A'; g.fillRect(-10, -250, 20, 200); g.fillStyle = '#B8B2A6'; g.fillRect(-14, -60, 28, 30); g.fillStyle = P.white; g.beginPath(); g.moveTo(-14, -30); g.lineTo(14, -30); g.lineTo(0, 12); g.fill(); g.restore(); }
+    g.save(); g.globalAlpha = 1 - ramp(t, y93 - 0.2, y93 + 0.1); markerText('painted label', 790, 820, 50, ramp(t, B.painted + 0.2, B.painted + 0.6), { key: 172, rot: 0.06 }); g.restore();
+    if (plasticU < 0.3) marker(curve(760, 860, 640, 940, 0.2), ramp(t, B.painted + 0.4, B.painted + 0.7), { key: 173, w: 7, head: true, alpha: 1 - plasticU * 3 });
+  }
+  drawStamp('REGISTERED TRADEMARK', 540, 1230, -0.12, t, B.y1960 + 0.35, { size: 70, sub: 'THE SHAPE ITSELF · 1960', out: y93 - 0.05 });
+  // plastic arrives
+  if (plasticU > 0) {
+    const pu = eback(ramp(t, y93 + 0.05, y93 + 0.6));
+    place(vessel('pet', V.pet(760)), 760 + (1 - pu) * 700, 1060, { rot: 0.04, key: 175 });
+    if (t > B.plastic + 0.25) {
+      const k = ramp(t, B.plastic + 0.25, B.plastic + 0.85);
+      // trace the shared curve on both
+      for (const [cx, o] of [[330, V.contour()], [760, V.pet(760)]]) {
+        const { h, w, R } = o, top = vesselTop(o, 1060);
+        const pts = []; for (let i = Math.round(0.30 * NS); i < 0.92 * NS; i += 3) pts.push([cx + R[i] * w / 2 + 16, top + i / NS * h]);
+        marker(pts, k, { key: 176 + cx, w: 8 });
+      }
+      markerText('same curves', 540, 1460, 64, k, { key: 178, rot: -0.04 });
+    }
+  }
+}
+
+// 7 — payoff: the lineup, not decoration, a signature you can feel
+function scene7(t) {
+  bgPaper(NEWS_A, 'rgba(255,240,220,1)', 0.6);
+  const t0 = T.s7, lineOut = eio(ramp(t, B.anti - 0.6, B.anti - 0.1));
+  // lineup across the years
+  const items = [['glass', V.glass(470), '1886'], ['hutch', V.hutch(430), '1894'], ['straight', V.straight(400), '1900s'], ['contour', V.contour(400), '1916'], ['pet', V.pet(380), '1993']];
+  if (lineOut < 1) {
+    g.save(); g.globalAlpha = 1 - lineOut; g.translate(0, -lineOut * 200);
+    marker(curve(60, 1270, 1020, 1270, 0.01), ramp(t, t0 + 0.2, t0 + 0.9), { key: 180, w: 8, color: P.ink });
+    items.forEach(([k, o, yr], i) => {
+      const x = 120 + i * 210, u = eback(ramp(t, t0 + 0.25 + i * 0.12, t0 + 0.65 + i * 0.12));
+      const c = vessel('line-' + k, o);
+      place(c, x, 1250 - c.h / 2 + 40 + (1 - u) * 300, { key: 181 + i, alpha: clamp(u * 2) });
+      g.save(); g.globalAlpha *= clamp(u * 2); g.fillStyle = P.ink; g.font = `400 40px Anton`; g.textAlign = 'center'; g.fillText(yr, x, 1335); g.restore();
+    });
+    // "decoration" crossed out
+    const dv = ramp(t, B.deco - 0.25, B.deco);
+    if (dv > 0) {
+      drawRansom(ransom('DECORATION', 96, 12), 540, 560, t, B.deco - 0.3, { stagger: 0.02 });
+      marker([[110, 575], [970, 545]], ramp(t, B.deco + 0.25, B.deco + 0.5), { key: 185, w: 16 });
+      marker([[120, 540], [960, 590]], ramp(t, B.deco + 0.42, B.deco + 0.62), { key: 186, w: 12 });
+    }
+    g.restore();
+  }
+  // hero + headline
+  if (lineOut > 0) {
+    const u = eback(ramp(t, B.anti - 0.35, B.anti + 0.2));
+    g.save(); g.globalAlpha = 0.9 * lineOut; const bb = burst(520, P.red, 7); g.drawImage(bb, 540 - 520, 1110 - 520); g.restore();
+    place(strip(1240, 300, P.ink, 190), 540, 1250, { rot: -0.04, key: 190, alpha: lineOut });
+    place(vessel('contour700', V.contour(700)), 540, 1000 + (1 - u) * 900, { rot: 0.03, key: 191 });
+    drawRansom(ransom('ANTI-COPYCAT\nDEVICE', 118, 13), 540, 390, t, B.anti - 0.1, { stagger: 0.03, out: en('payoff') + 0.2 });
+    const fv = ramp(t, B.feelit - 0.15, B.feelit + 0.1);
+    place(strip(560, 104, P.white, 193, { torn: 'lr' }), 540, 1440, { rot: -0.03, key: 193, alpha: fv, scale: lerp(1.2, 1, eout(fv)) });
+    markerText('you can feel it.', 540, 1440, 62, ramp(t, B.feelit, B.feelit + 0.5), { key: 193, color: P.red, rot: -0.03 });
+  }
+  // end card
+  const endT = en('payoff') + 0.35;
+  if (t > endT) {
+    const v = eout(ramp(t, endT, endT + 0.4));
+    place(strip(900, 170, P.white, 195, { torn: 'lr' }), 540, 400 + (1 - v) * 40, { rot: -0.02, key: 195, alpha: v });
+    g.save(); g.globalAlpha = v; g.translate(540, 400 + (1 - v) * 40); g.rotate(-0.02); g.fillStyle = P.ink; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = `italic 900 78px 'Playfair Display'`; g.fillText('The Contour Bottle', 0, -4);
+    g.restore();
+    kicker('DESIGNED 1915 · STILL IN YOUR HAND', 540, 540, t, endT + 0.25, { key: 7, bg: P.red, fg: P.white, size: 34 });
+  }
+}
+
+const SCENES = [scene0, scene1, scene2, scene3, scene4, scene5, scene6, scene7];
+
+/* ------------------------------------------------------------------ frame */
+function sceneIndex(t) { let i = 0; while (i < BOUNDS.length - 2 && t >= BOUNDS[i + 1]) i++; return i; }
+function drawScene(i, t) {
+  // gentle push-in per scene
+  const a = BOUNDS[i], b = BOUNDS[i + 1], k = 1 + 0.035 * clamp((t - a) / (b - a));
+  g.save(); g.translate(540, 1000); g.scale(k, k); g.translate(-540, -1000);
+  SCENES[i](t);
+  g.restore();
+}
+function frame(t) {
+  TICK = Math.floor(t * 12);
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+  const i = sceneIndex(t);
+  // transition: next sheet slides up over the last with a torn top edge
+  const nb = BOUNDS[i + 1], pb = BOUNDS[i];
+  let drew = false;
+  if (i < SCENES.length - 1 && t > nb - TR_IN) { // upcoming boundary (we are just before it)
+    const u = eio(ramp(t, nb - TR_IN, nb + TR_OUT));
+    drawScene(i, t); sheet(i + 1, t, u); drew = true;
+  } else if (i > 0 && t < pb + TR_OUT) {
+    const u = eio(ramp(t, pb - TR_IN, pb + TR_OUT));
+    drawScene(i - 1, t); sheet(i, t, u); drew = true;
+  }
+  if (!drew) drawScene(i, t);
+  drawCaption(t);
+  // grain + vignette
+  g.save(); g.globalCompositeOperation = 'soft-light'; g.globalAlpha = 0.20; g.drawImage(GRAIN[TICK % 4], 0, 0, W, H); g.restore();
+  g.save(); g.globalCompositeOperation = 'multiply'; g.globalAlpha = 0.07; g.drawImage(GRAIN[(TICK + 2) % 4], 0, 0, W, H); g.restore();
+  const vg = g.createRadialGradient(540, 960, 500, 540, 960, 1250); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(40,20,0,0.30)');
+  g.fillStyle = vg; g.fillRect(0, 0, W, H);
+  return {};
+}
+function sheet(i, t, u) {
+  const off = (1 - u) * (H + 80);
+  const r = rng(1000 + i), edge = []; for (let x = -20; x <= W + 20; x += 24) edge.push([x, (r() - 0.5) * 34 + Math.sin(x * 0.01 + i) * 10]);
+  // shadow cast by the sheet edge
+  g.save(); g.translate(0, off);
+  g.beginPath(); edge.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.lineTo(W + 20, H + 200); g.lineTo(-20, H + 200); g.closePath();
+  g.shadowColor = 'rgba(30,15,0,0.5)'; g.shadowBlur = 30; g.shadowOffsetY = -8; g.fillStyle = P.paper; g.fill();
+  g.restore();
+  g.save(); g.translate(0, off);
+  g.beginPath(); edge.forEach((p, k) => k ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1])); g.lineTo(W + 20, H + 200); g.lineTo(-20, H + 200); g.closePath(); g.clip();
+  g.translate(0, -off * 0.0); drawScene(i, t);
+  g.restore();
+  // torn white fibre lip
+  g.save(); g.translate(0, off); g.strokeStyle = 'rgba(250,246,236,0.95)'; g.lineWidth = 7; g.beginPath(); edge.forEach((p, k) => k ? g.lineTo(p[0], p[1] + 2) : g.moveTo(p[0], p[1] + 2)); g.stroke(); g.restore();
+}
+
+/* ------------------------------------------------------------------ sound design (one-shots) */
+function buildEvents() {
+  // typing in the dark
+  for (let k = 0; k < 15; k++) ev(0.55 + k * 0.06, 'clack', 0.5, 0.9 + (k % 3) * 0.08);
+  ev(B.point - 0.15, 'swish', 1.2); ev(B.point - 0.1, 'whoosh', 0.8);
+  for (let k = 0; k < 11; k++) ev(B.point + 0.1 + k * 0.035, 'tick', 0.6);
+  for (let i = 1; i < BOUNDS.length - 1; i++) { ev(BOUNDS[i] - 0.25, 'swish', 1.0); ev(BOUNDS[i] - 0.2, 'whoosh', 0.55); }
+  // years: letters slapping down
+  const years = [[B.y1886 - 0.25, 4], [T.s2 + 0.1, 4], [B.y1915 - 0.3, 4], [T.s5 + 0.05, 4], [B.y1957 - 0.35, 4], [B.y1960 - 0.1, 4], [B.plastic - 0.35, 4]];
+  for (const [t0, n] of years) for (let k = 0; k < n; k++) ev(t0 + k * 0.07, 'tick', 0.9, 0.8 + k * 0.05);
+  for (let k = 0; k < 12; k++) ev(B.anti - 0.1 + k * 0.03, 'tick', 0.6);
+  ev(T.s1 + 0.4, 'pop', 0.6); ev(B.cents, 'ding', 0.9);
+  for (let k = 0; k < 6; k++) ev(T.s1 + 1.2 + k * 0.45, 'pop', 0.25, 1.4 + (k % 3) * 0.3); // fizz
+  ev(B.nobottle - 0.1, 'swish', 0.7); ev(B.nobottle + 0.06, 'swish', 0.7);
+  ev(B.label + 0.25, 'thud', 0.6, 1.6);
+  ev(B.ice - 0.1, 'splash', 1.0); ev(B.ice + 0.4, 'drip', 0.6); ev(B.ice + 1.1, 'drip', 0.5, 1.2);
+  ev(B.copy, 'whoosh', 0.6); ev(B.koka, 'thud', 0.5, 1.5); ev(B.koka + 0.24, 'thud', 0.5, 1.6);
+  ev(B.same + 0.75, 'thud', 1.1);
+  // memo typing
+  const total = MEMO.join('').length, ts = B.asked - 0.45, te = B.feel - 0.4;
+  for (let k = 0; k < total; k += 2) ev(ts + (te - ts) * k / total, 'clack', 0.45, 0.9 + (k % 5) * 0.05);
+  ev(te + 0.05, 'ding', 0.6, 1.2);
+  ev(B.feel - 0.35, 'click', 1.0, 0.6);
+  ev(B.broken, 'crash', 1.0);
+  ev(B.dean - 0.1, 'swish', 0.6);
+  ev(B.coca - 0.1, 'swish', 0.4); ev(B.coca + 0.35, 'swish', 0.4);
+  ev(B.cocoa - 0.3, 'whoosh', 0.8);
+  ev(B.wrong, 'thud', 1.2); ev(B.perfect, 'thud', 1.0, 1.15);
+  ev(B.perfect + 0.35, 'whoosh', 0.7); ev(B.ribs + 0.25, 'chime', 0.6);
+  ev(B.contour - 0.15, 'thud', 1.0);
+  ev(B.slim, 'spring', 0.5, 1.3); ev(B.people - 0.2, 'swish', 0.9);
+  ev(B.painted - 0.1, 'swish', 0.6); ev(B.painted + 0.4, 'swish', 0.5);
+  ev(B.y1960 + 0.35, 'thud', 1.3);
+  ev(B.plastic - 0.3, 'whoosh', 0.8);
+  ev(B.deco + 0.25, 'swish', 0.8); ev(B.deco + 0.42, 'swish', 0.8);
+  ev(B.anti - 0.35, 'whoosh', 0.8);
+  ev(en('payoff') + 0.35, 'chime', 0.8);
+}
+
+/* ------------------------------------------------------------------ boot */
+window.SCENE = { duration: TOTAL };
+const FAM = ["400 20px Anton", "900 20px 'Playfair Display'", "italic 900 20px 'Playfair Display'", "400 20px 'Special Elite'", "400 20px UnifrakturMaguntia",
+  "400 20px 'Permanent Marker'", "700 20px Oswald", "400 20px 'Old Standard TT'", "700 20px 'Old Standard TT'", "italic 400 20px 'Old Standard TT'",
+  "400 20px 'Abril Fatface'", "400 20px 'Courier Prime'", "700 20px 'Courier Prime'"];
+Promise.all(FAM.map(f => document.fonts.load(f))).then(() => {
+  window.fontsReady = FAM.every(f => document.fonts.check(f));
+  init(); buildEvents(); window.EVENTS = EVENTS.sort((a, b) => a.t - b.t);
+  window.renderAt = t => { try { return frame(t); } catch (e) { window.SCENE_ERRORS.push(e.stack || String(e)); return {}; } };
+  if (!VIDEO) {
+    const q = location.search.match(/t=([\d.]+)/); let start = performance.now() - (q ? +q[1] * 1000 : 0), paused = false, pt = 0;
+    addEventListener('keydown', e => { if (e.code === 'Space') { paused = !paused; if (!paused) start = performance.now() - pt * 1000; } if (e.key === 'r') start = performance.now(); });
+    const loopF = () => { if (!paused) { pt = ((performance.now() - start) / 1000) % TOTAL; window.renderAt(pt); } requestAnimationFrame(loopF); };
+    requestAnimationFrame(loopF);
+  }
+});
+</script>
+</body>
+</html>

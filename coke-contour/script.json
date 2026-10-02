@@ -1,0 +1,62 @@
+{
+  "voice": "af_heart",
+  "speed": 1.08,
+  "lead": 0.6,
+  "tail": 2.6,
+  "lines": [
+    {
+      "id": "hook",
+      "text": "Close your eyes, and you could still pick this bottle out of a crowd. That was the whole point."
+    },
+    {
+      "id": "fountain",
+      "text": "Coca-Cola started in eighteen eighty-six as a soda fountain drink. Five cents a glass. No bottle at all.",
+      "pauseBefore": 0.7
+    },
+    {
+      "id": "straight",
+      "text": "When bottlers took over, it shipped in plain, straight-sided glass with a paper label.",
+      "pauseBefore": 0.5
+    },
+    {
+      "id": "copycats",
+      "text": "Those labels slid off in tubs of ice water, and copycats like Koka-Nola used the exact same bottles.",
+      "pauseBefore": 0.4
+    },
+    {
+      "id": "brief",
+      "text": "So in nineteen fifteen, the company asked for a bottle you could recognize by feel in the dark, or even broken on the ground.",
+      "pauseBefore": 0.7
+    },
+    {
+      "id": "root",
+      "text": "At the Root Glass Company in Indiana, Earl Dean looked up coca and kola in an encyclopedia.",
+      "pauseBefore": 0.6
+    },
+    {
+      "id": "pod",
+      "text": "He found a cocoa pod instead. Wrong plant. Perfect shape. Its long ribs and round belly became the contour bottle.",
+      "pauseBefore": 0.4
+    },
+    {
+      "id": "fix",
+      "text": "The first version wobbled on the conveyor belt, so they slimmed it down. People called it the hobble skirt.",
+      "pauseBefore": 0.5
+    },
+    {
+      "id": "later",
+      "text": "Painted labels arrived in nineteen fifty-seven. In nineteen sixty, the shape itself was trademarked.",
+      "pauseBefore": 0.6
+    },
+    {
+      "id": "plastic",
+      "text": "Even the plastic bottles kept the curves.",
+      "pauseBefore": 0.3
+    },
+    {
+      "id": "payoff",
+      "text": "So that shape isn't decoration. It's a hundred-year-old anti-copycat device you can feel.",
+      "pauseBefore": 0.7
+    }
+  ]
+}
