@@ -583,9 +583,9 @@ function buildScenes() {
   s3.push(P(scrap(1000, 1100, { seed: 31, color: '#d9cdb0', edge: 10 }), 560, 560, TR[2] + 0.1, { anim: 'slideL', rot: 0.02, quiet: true }));
   s3.push(P(flagStrips([FRBLUE, '#f6f1e6', RED], 330, 220, true, 11), 1720, 150, TR[2] + 0.15, { rot: 0.09, quiet: true }));
   const docs = clip('doctors', 560, { caption: 'FACULTY OF MEDICINE, PARIS' });
-  s3.push(P(docs || decree(), 540, 520, 24.0, { rot: -0.03, s: docs ? 1 : 1.22 }));
-  s3.push(P(textScrap('1772', { font: '120px Abril', bg: RED, fg: CREAM, seed: 12 }), 260, 170, 26.1, { anim: 'slam', rot: -0.07 }));
-  s3.push(St(stamp('SAFE TO EAT', BLUEINK, 110), 600, 860, 29.3, { rot: -0.1 }));
+  s3.push(P(docs || decree(), 600, 590, 24.0, { rot: -0.03, s: docs ? 1 : 1.22 }));
+  s3.push(P(textScrap('1772', { font: '120px Abril', bg: RED, fg: CREAM, seed: 12 }), 215, 135, 26.1, { anim: 'slam', rot: -0.07 }));
+  s3.push(St(stamp('SAFE TO EAT', BLUEINK, 110), 640, 900, 29.3, { rot: -0.1 }));
   s3.push(P(clip('bridge', 700, { caption: 'PONT NEUF, PARIS' }), 1330, 400, 30.8, { anim: 'slideR', rot: 0.03 }));
   const vend = clip('vendor', 470, { caption: 'FRIED ON THE STREET' });
   s3.push(vend ? P(vend, 1480, 790, 31.6, { rot: -0.05 }) : P(textScrap('POMMES FRITES', { font: '80px Fraktur', bg: CREAM }), 1450, 820, 31.6, { rot: -0.04 }));
