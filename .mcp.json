@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pixabay": {
+      "command": "npx",
+      "args": ["-y", "pixabay-mcp@latest"],
+      "env": {
+        "PIXABAY_API_KEY": "${PIXABAY_API_KEY}"
+      }
+    }
+  }
+}
