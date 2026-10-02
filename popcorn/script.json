@@ -1,0 +1,17 @@
+{
+  "voice": "af_heart",
+  "speed": 1.03,
+  "lead": 0.8,
+  "tail": 3.6,
+  "lines": [
+    { "id": "hook",    "text": "Why does every movie theater smell like popcorn? Funny thing is, it wasn't always welcome." },
+    { "id": "ancient", "text": "People have popped corn for thousands of years. In Peru, archaeologists found popcorn about six thousand seven hundred years old.", "pauseBefore": 1.2 },
+    { "id": "cretors", "text": "In eighteen eighty-five, Charles Cretors of Chicago built a steam-powered popcorn machine. Now vendors could pop it anywhere.", "pauseBefore": 0.8 },
+    { "id": "ban",     "text": "But the grand movie palaces kept it out. They had fancy carpets, and silent films meant reading title cards. They wanted a classy crowd.", "pauseBefore": 0.8 },
+    { "id": "talkies", "text": "Then, in nineteen twenty-seven, the talkies arrived, and everyone came to the movies.", "pauseBefore": 0.8 },
+    { "id": "crash",   "text": "When the Depression hit, a bag of popcorn cost a nickel or a dime. Theaters that started selling it stayed in business.", "pauseBefore": 0.7 },
+    { "id": "war",     "text": "In World War Two, sugar rationing made candy scarce. Americans ate three times as much popcorn.", "pauseBefore": 0.7 },
+    { "id": "today",   "text": "Today, a bucket costs the theater pennies to make, and it helps keep the lights on.", "pauseBefore": 0.7 },
+    { "id": "outro",   "text": "So popcorn didn't sneak into the movies. It saved them.", "pauseBefore": 0.8 }
+  ]
+}

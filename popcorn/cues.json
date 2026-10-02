@@ -1,0 +1,70 @@
+{
+ "total": 64.81,
+ "order": [
+  "hook",
+  "ancient",
+  "cretors",
+  "ban",
+  "talkies",
+  "crash",
+  "war",
+  "today",
+  "outro"
+ ],
+ "lines": {
+  "hook": {
+   "at": 0.8,
+   "dur": 5.18,
+   "end": 5.98,
+   "text": "Why does every movie theater smell like popcorn? Funny thing is, it wasn't always welcome."
+  },
+  "ancient": {
+   "at": 7.18,
+   "dur": 7.77,
+   "end": 14.95,
+   "text": "People have popped corn for thousands of years. In Peru, archaeologists found popcorn about six thousand seven hundred years old."
+  },
+  "cretors": {
+   "at": 15.75,
+   "dur": 7.31,
+   "end": 23.06,
+   "text": "In eighteen eighty-five, Charles Cretors of Chicago built a steam-powered popcorn machine. Now vendors could pop it anywhere."
+  },
+  "ban": {
+   "at": 23.86,
+   "dur": 8.21,
+   "end": 32.07,
+   "text": "But the grand movie palaces kept it out. They had fancy carpets, and silent films meant reading title cards. They wanted a classy crowd."
+  },
+  "talkies": {
+   "at": 32.87,
+   "dur": 4.81,
+   "end": 37.68,
+   "text": "Then, in nineteen twenty-seven, the talkies arrived, and everyone came to the movies."
+  },
+  "crash": {
+   "at": 38.38,
+   "dur": 6.84,
+   "end": 45.22,
+   "text": "When the Depression hit, a bag of popcorn cost a nickel or a dime. Theaters that started selling it stayed in business."
+  },
+  "war": {
+   "at": 45.92,
+   "dur": 6.18,
+   "end": 52.11,
+   "text": "In World War Two, sugar rationing made candy scarce. Americans ate three times as much popcorn."
+  },
+  "today": {
+   "at": 52.81,
+   "dur": 4.33,
+   "end": 57.14,
+   "text": "Today, a bucket costs the theater pennies to make, and it helps keep the lights on."
+  },
+  "outro": {
+   "at": 57.94,
+   "dur": 3.27,
+   "end": 61.21,
+   "text": "So popcorn didn't sneak into the movies. It saved them."
+  }
+ }
+}
